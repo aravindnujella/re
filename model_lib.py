@@ -9,14 +9,15 @@ import skimage.io
 import skimage.measure
 import random
 import numpy as np
-import torch
 import time
 import pickle
-# import torch.nn as nn
-# import torch.nn.functional as F
-# import torch.optim as optim
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
 import torch.utils.data
-# from torch.autograd import Variable
+from torch.autograd import Variable
 
 
 class CocoDataset(torch.utils.data.Dataset):
@@ -36,7 +37,7 @@ class CocoDataset(torch.utils.data.Dataset):
         return len(self.dataset.instance_info)
 
     def generate_targets(self, masks, class_id):
-        num_classes = config.NUM_CLASSES
+        num_classes = self.config.NUM_CLASSES
         mask = masks[:, :, 0]
         umask = masks[:, :, 1]
         one_hot_class = np.zeros((num_classes,))
@@ -111,7 +112,7 @@ class CocoDataset(torch.utils.data.Dataset):
         #     masks = np.fliplr(masks)
         return image, masks, class_id
 
-
+# we take cid object from main (ugly interface)
 def get_loader(dataset_cid, config):
     coco_dataset = CocoDataset(dataset_cid, config)
     data_loader = torch.utils.data.DataLoader(dataset=coco_dataset,
@@ -119,3 +120,4 @@ def get_loader(dataset_cid, config):
                                               shuffle=True,
                                               num_workers=8)
     return data_loader
+
