@@ -10,6 +10,7 @@ import skimage.measure
 import random
 import numpy as np
 import torch
+import time
 # import torch.nn as nn
 # import torch.nn.functional as F
 # import torch.optim as optim
@@ -408,8 +409,8 @@ class pyTorchDataset(torch.utils.data.Dataset):
         batch_class_ids = np.zeros((l,)+(config.NUM_CLASSES,))
 
         for i, g in enumerate(np.rollaxis(masks, 2)):
-            # masks maybe very small,all zeros,
-            # or it is a crowd of persons if so skip this
+            masks maybe very small,all zeros,
+            or it is a crowd of persons if so skip this
             if np.sum(g) <= 20*20 or class_ids[i] == -1:
                 continue
             else:
@@ -434,13 +435,15 @@ class pyTorchDataset(torch.utils.data.Dataset):
                 # using crowds other than humans
                 batch_class_ids[b][abs(class_ids[i])] = 1
                 b += 1
-        return batch_images, batch_impulses, batch_masks, batch_class_ids
+        return batch_images[:b], batch_impulses[:b], batch_masks[:b], batch_class_ids[:b]
 
     def __getitem__(self, image_index):
         image, class_ids, masks = self.load_image_gt(image_index)
-        batch_images, batch_impulses, batch_masks, batch_class_ids = self.generate_targets(
-            image, class_ids, masks)
-        return torch.from_numpy(batch_images), torch.from_numpy(batch_impulses), torch.from_numpy(batch_masks), torch.from_numpy(batch_class_ids)
+        # start = time.time()
+        batch_images, batch_impulses, batch_masks, batch_class_ids = self.generate_targets(image, class_ids, masks)
+        # end = time.time()
+        # print("generate targets time: per_image:\t" + str(end-start))
+        return batch_images, batch_impulses, batch_masks, batch_class_ids
 
     def __len__(self):
         return self.image_ids.shape[0]
@@ -500,52 +503,31 @@ class pyTorchDataset(torch.utils.data.Dataset):
         return image, class_ids, masks
 
 
-def collate_fn(data):
-    # data: list of tuples(image,class_ids,masks)
-    # list of images, list of lists of class_ids, list of lists of np.arrays()
-    # list of tuples (batch_images,batch_impulses,batch_masks,batch_class_ids)
-    batch_images, batch_impulses, batch_masks, batch_class_ids = zip(*data)
-    l = sum([len(i) for i in batch_images])
-    print(len(batch_images[0]))
-    return torch.cat(batch_images, 0), torch.cat(batch_impulses, 0), torch.cat(batch_masks, 0), torch.cat(batch_class_ids, 0)
-
-    # for  in batch_images:
-    # l = len(images)
-    # image_shape = images[0].shape
-    # w, h = image_shape[0], image_shape[1]
-    # batch_size = sum([len(class_ids[i]) for i in range(l)])
-    # batch_images = np.zeros((batch_size,)+image_shape)
-    # batch_class_ids = np.zeros((batch_size,)+)
-    # batch_index = 0
-    # for i in range(l):
-
-    # return 0
-
+# def collate_fn(data):
+#     # start = time.time()
+#     # data: list of tuples(image,class_ids,masks)
+#     # list of images, list of lists of class_ids, list of lists of np.arrays()
+#     # list of tuples (batch_images,batch_impulses,batch_masks,batch_class_ids)
+#     batch_images, batch_impulses, batch_masks, batch_class_ids = zip(*data)
+#     # l = sum([len(i) for i in batch_images])
+#     # batch_images, batch_impulses, batch_masks, batch_class_ids = torch.cat(batch_images, 0), torch.cat(batch_impulses, 0), torch.cat(batch_masks, 0), torch.cat(batch_class_ids, 0)
+#     # end = time.time()
+#     # print("collate_time:per batch:\t" + str(end-start))
+#     return batch_images, batch_impulses, batch_masks, batch_class_ids
 
 def get_loader(root_dir, split, year, config):
     coco_data = CocoDataset()
     coco_data.load_coco(root_dir, split, year)
     coco_data.prepare()
     coco_data = pyTorchDataset(coco_data, config)
-    # coco = CocoDataset(root=root,
-    #                    json=json,
-    #                    vocab=vocab,
-    #                    transform=transform)
-
-    # Data loader for COCO dataset
-    # This will return (images, captions, lengths) for each iteration.
-    # images: a tensor of shape (batch_size, 3, 224, 224).
-    # captions: a tensor of shape (batch_size, padded_length).
-    # lengths: a list indicating valid length for each caption. length is (batch_size).
     data_loader = torch.utils.data.DataLoader(dataset=coco_data,
                                               batch_size=config.BATCH_SIZE,
                                               shuffle=True,
-                                              num_workers=10,
-                                              collate_fn=collate_fn)
+                                              num_workers=8)
     return data_loader
 
 
-class Dataset(torch.utils.data.Dataset):
+class MRCNN_Dataset(torch.utils.data.Dataset):
     def __init__(self, dataset, config, augment=True):
         self.b = 0  # batch item index
         self.image_index = -1
