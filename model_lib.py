@@ -25,12 +25,14 @@ class CocoDataset(torch.utils.data.Dataset):
         self.dataset = dataset
         self.config = config
 
-    def __getitem__(self, image_index):
-        image, masks, class_id = self.load_image_gt(image_index)
-        # start = time.time()
-        impulse, gt_response, class_id = self.generate_targets(masks, class_id)
-        # end = time.time()
-        # print("generate targets time: per_image:\t" + str(end-start))
+    def __getitem__(self, instance_index):
+        impulse, gt_response, class_id, is_bad_image = None, None, None, True
+        # skipping bad images. is this bad?
+        while is_bad_image:
+            image, masks, class_id = self.load_image_gt(instance_index)
+            impulse, gt_response, class_id, is_bad_image = self.generate_targets(
+                masks, class_id)
+            instance_index += 1
         return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.from_numpy(class_id)
 
     def __len__(self):
@@ -40,11 +42,21 @@ class CocoDataset(torch.utils.data.Dataset):
         num_classes = self.config.NUM_CLASSES
         mask = masks[:, :, 0]
         umask = masks[:, :, 1]
+        # what other bad cases? add them here
+        # currently crowd, zero sized masks are flagged as bad instances
+        if class_id < 0 or np.sum(mask) == 0:
+            return None,None,None,True
+        # not bad image
         one_hot_class = np.zeros((num_classes,))
         one_hot_class[class_id] = 1
+        # happens when cake on dining table, tie on human etc
+        if np.sum(umask)/np.sum(mask) < 0.3:
+            umask = mask
+        # currently impulses are produced to fine tune for classification.
+        # in future impulse gen code needs to be written
         impulse = umask
         gt_response = mask
-        return impulse, gt_response, one_hot_class
+        return impulse, gt_response, one_hot_class, False
 
     def resize_image(self, image, min_dim=None, max_dim=None, padding=False):
         # Default window (y1, x1, y2, x2) and default scale == 1.
@@ -112,7 +124,16 @@ class CocoDataset(torch.utils.data.Dataset):
         #     masks = np.fliplr(masks)
         return image, masks, class_id
 
+
+# write custom collate to delete bad instances?
+# def _collate_fn(batch):
+#     batch = filter(lambda x: x is not None, batch)
+#     return default_collate(batch)
+
+
 # we take cid object from main (ugly interface)
+
+
 def get_loader(dataset_cid, config):
     coco_dataset = CocoDataset(dataset_cid, config)
     data_loader = torch.utils.data.DataLoader(dataset=coco_dataset,
@@ -120,4 +141,3 @@ def get_loader(dataset_cid, config):
                                               shuffle=True,
                                               num_workers=8)
     return data_loader
-
