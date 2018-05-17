@@ -154,6 +154,7 @@ class BasicBlock(nn.Module):
         self.comp_block = nn.Sequential(*convs)
     def forward(self,x):
         return x + self.comp_block(x)
+
 class up_sample(nn.Module):
     def __init__(self):
         super(up_sample, self).__init__()
@@ -173,26 +174,25 @@ class up_sample(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
+# downsample input n times 
+# input image has 4 channels (2,2) MaxPool2d
 # 
 def down_sample(nn.Module):
-    def __init__(self):
+    def __init__(self,n):
         super(down_sample, self).__init__()
-
-        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.n = n
+        self.block_1 = BasicBlock([4,64,64])
+        self.comp_block = [BasicBlock([64,64,64]) for in range(n)]
         self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-
     def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        x = block1(x)
+        outs = [x]
+        n = self.n
+        for i in range(n):
+            x = self.comp_block[i](x)
+            x = self.pool(x)
+            outs.append(x)
+        return outs
 # this is one down_sample and one up_sample
 class HGModel(nn.Module):
     def __init__(self):
