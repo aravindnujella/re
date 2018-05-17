@@ -141,7 +141,19 @@ def get_loader(dataset_cid, config):
                                               num_workers=8)
     return data_loader
 
-
+# 1) convolve 2) batchnorm 3) add residual 
+class BasicBlock(nn.Module):
+    def __init__(self,channel_sizes):
+        super(BasicBlock, self).__init__()
+        l = len(channel_sizes)
+        self.layers = []
+        for i in range(l-1):
+            self.layers.append(nn.Conv2d(
+                in_channels=channel_sizes[i], out_channels=channel_sizes[i+1], kernel_size=(3, 3), padding=1))
+            self.layers.append(nn.BatchNorm2d(num_features = channel_sizes[i+1],track_running_stats = True))
+        self.comp_block = nn.Sequential(*convs)
+    def forward(self,x):
+        return x + self.comp_block(x)
 class up_sample(nn.Module):
     def __init__(self):
         super(up_sample, self).__init__()
@@ -161,7 +173,7 @@ class up_sample(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
-
+# 
 def down_sample(nn.Module):
     def __init__(self):
         super(down_sample, self).__init__()
