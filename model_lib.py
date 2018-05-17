@@ -159,50 +159,81 @@ class BasicBlock(nn.Module):
 
     def forward(self, x):
         return F.relu(x + self.conv_block(x))
+
+# proposes masks for single scale feature maps.
+# for multi_scale super vision, use this multiple times
+class MaskProp(nn.Module):
+    def __init__(self):
+        super(MaskProp, self).__init__()
+        self.bb1 = BasicBlock([64,32,16])
+        self.conv1 = nn.Conv2d(16,1,(1,1))
+    def forward(self, x):
+        x = self.bb1(x)
+        x = self.conv1(x)
+        return x
+# classifier takes a single level features and classifies
+class Classifier(nn.Module):
+    def __init__(self):
+        super(Classifier, self).__init__()
+        self.bb1 = BasicBlock([64,64,64])
+        self.gap = nn.AvgPool2d((10,10),stride = 1)
+        self.fc = nn.Linear(64,81)
+    def forward(self, x):
+        x = self.bb1(x)
+        x = F.max_pool2d(x)
+        x = self.gap(x)
+        x = self.fc(x)
+        return x
+
+
 # this is one down_sample and one up_sample
-
-
 class SimpleHGModel(nn.Module):
     def __init__(self):
         super(SimpleHGModel, self).__init__()
-        self.down_conv_1 = BasicBlock([64,64,64])
-        self.down_conv_2 = BasicBlock([64,64,64])
-        self.down_conv_3 = BasicBlock([64,64,64])
-        self.down_conv_4 = BasicBlock([64,64,64])
-        self.down_conv_5 = BasicBlock([64,64,64])
-        self.down_conv_6 = BasicBlock([64,64,64])
+        self.down_conv_1 = BasicBlock([64, 64, 64])
+        self.down_conv_2 = BasicBlock([64, 64, 64])
+        self.down_conv_3 = BasicBlock([64, 64, 64])
+        self.down_conv_4 = BasicBlock([64, 64, 64])
+        self.down_conv_5 = BasicBlock([64, 64, 64])
+        self.down_conv_6 = BasicBlock([64, 64, 64])
 
-        self.up_conv_1 = BasicBlock([64,64,64])
-        self.up_conv_2 = BasicBlock([64,64,64])
-        self.up_conv_3 = BasicBlock([64,64,64])
-        self.up_conv_4 = BasicBlock([64,64,64])
-        self.up_conv_5 = BasicBlock([64,64,64])
-        self.up_conv_6 = BasicBlock([64,64,64])
+        self._conv_0 = BasicBlock([64, 64, 64])
+
+        self.up_conv_1 = BasicBlock([64, 64, 64])
+        self.up_conv_2 = BasicBlock([64, 64, 64])
+        self.up_conv_3 = BasicBlock([64, 64, 64])
+        self.up_conv_4 = BasicBlock([64, 64, 64])
+        self.up_conv_5 = BasicBlock([64, 64, 64])
+        self.up_conv_6 = BasicBlock([64, 64, 64])
+
+        self.mask_predictor = MaskProp()
+        self.class_predictor = Classifier()
 
     def forward(self, x):
         # HourGlass
         # inp = torch.concat(x[0],x[1],axis = 1)
+        # [640,320,160,80,40,20]
         down_convs = []
-        inp = down_conv_1(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
-        inp = down_conv_2(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
-        inp = down_conv_3(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
-        inp = down_conv_4(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
-        inp = down_conv_5(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
-        inp = down_conv_6(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
-
-        inp = _conv_0(inp);
-
+        inp = self.down_conv_1(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_2(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_3(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_4(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_5(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_6(inp); down_convs.append(inp);  # inp = F.max_pool2d(inp,(2,2),2)
+        # [20]
+        inp = self._conv_0(inp);
+        # [20,40,80,160,320,640]
         up_convs = []
-        inp = up_conv_1(inp + down_convs[-1]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
-        inp = up_conv_2(inp + down_convs[-2]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
-        inp = up_conv_3(inp + down_convs[-3]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
-        inp = up_conv_4(inp + down_convs[-4]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
-        inp = up_conv_5(inp + down_convs[-5]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
-        inp = up_conv_6(inp + down_convs[-6]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
+        inp = self.up_conv_1(inp + down_convs[-1]); up_convs.append(inp); inp = F.upsample(inp, scale_factor=2)
+        inp = self.up_conv_2(inp + down_convs[-2]); up_convs.append(inp); inp = F.upsample(inp, scale_factor=2)
+        inp = self.up_conv_3(inp + down_convs[-3]); up_convs.append(inp); inp = F.upsample(inp, scale_factor=2)
+        inp = self.up_conv_4(inp + down_convs[-4]); up_convs.append(inp); inp = F.upsample(inp, scale_factor=2)
+        inp = self.up_conv_5(inp + down_convs[-5]); up_convs.append(inp); inp = F.upsample(inp, scale_factor=2)
+        inp = self.up_conv_6(inp + down_convs[-6]); up_convs.append(inp);  # inp = F.upsample(inp,scale_factor = 2)
 
-        # classification
-        down_convs[-1]
-        # Maskprediction
+        # Maskprediction, classification
+        return self.class_predictor(down_convs[-1]), self.mask_predictor(up_convs[0])
+
 
 def loss_criteria(gt_mask, pred_mask, gt_class, pred_class):
     # if gt_class[0] == 1:
@@ -213,8 +244,11 @@ def loss_criteria(gt_mask, pred_mask, gt_class, pred_class):
 
 
 def mask_loss(gt_mask, pred_mask):
-    return 0
+    # need to modify this
+    _loss = nn.SoftMarginLoss(reduce = True)
+    return _loss(pred_mask, gt_mask)
 
 
 def classfication_loss(gt_class, pred_class):
-    return 0
+    _loss = nn.CrossEntropyLoss()
+    return _loss(pred_class,gt_class)
