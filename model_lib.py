@@ -198,39 +198,29 @@ def down_sample(nn.Module):
 class HGModel(nn.Module):
     def __init__(self):
         super(HGModel, self).__init__()
-
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-
+        self.down_sampler = down_sample(5)
+        self.up_sampler = up_sample(3)
+        
+        # self.mask_proposal = nn.Sequential(nn.)
+        # self.gap = nn.GlobalAverage...
+        # self.fc = 
     def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+        input_image = x[0]
+        mask_clue = x[1]
+        downs = self.down_sampler(x)
+        ups = self.up_sampler(downs)
+        
+        pred_mask = self.mask_proposal(ups[-1])
+        pred_class = self.fc(self.gap(downs[-1]))
+        return mask,pred_class
 
-
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+def loss_criteria(gt_mask,pred_mask,gt_class,pred_class):
+    # if gt_class[0] == 1:
+    #     return classfication_loss(gt_class,pred_class)
+    # else:
+    #     return mask_loss(gt_mask,pred_mask) + classification_loss(gt_class,pred_class)
+    return mask_loss(gt_mask,pred_mask) + classification_loss(gt_class,pred_class)
+def mask_loss(gt_mask,pred_mask):
+    return 0
+def classfication_loss(gt_class,pred_class):
+    return 0
