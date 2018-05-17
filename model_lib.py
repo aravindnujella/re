@@ -155,7 +155,7 @@ class BasicBlock(nn.Module):
                 in_channels=channel_sizes[i], out_channels=channel_sizes[i + 1], kernel_size=(3, 3), padding=1))
             self.layers.append(nn.BatchNorm2d(num_features=channel_sizes[i + 1], track_running_stats=True))
             self.layers.append(nn.ReLU())
-        self.conv_block = nn.Sequential(*layers)
+        self.conv_block = nn.Sequential(*self.layers)
 
     def forward(self, x):
         return F.relu(x + self.conv_block(x))
@@ -211,7 +211,9 @@ class SimpleHGModel(nn.Module):
 
     def forward(self, x):
         # HourGlass
-        # inp = torch.concat(x[0],x[1],axis = 1)
+        image = x[0]
+        impulse = x[1].unsqueeze(-1)
+        inp = torch.cat([image,impulse],dim = -1)
         # [640,320,160,80,40,20]
         down_convs = []
         inp = self.down_conv_1(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
