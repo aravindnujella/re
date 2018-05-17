@@ -155,38 +155,39 @@ class BasicBlock(nn.Module):
     def forward(self,x):
         return x + self.comp_block(x)
 
+# up_sample input n times with forwarding connections
+# with forwarding shit
+# input has 64 channels intially?
+
 class up_sample(nn.Module):
-    def __init__(self):
+    def __init__(self,n):
         super(up_sample, self).__init__()
+        self.n = n
+        self.comp_block = [BasicBlock([64, 64, 64]) for i in range(n)]
+        self.unpool = nn.Upsample(scale_factor = 2, mode = 'nearest')
 
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.fc1 = nn.Linear(16 * 5 * 5, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
-
+    # x with smallest channel at the end (output of down_sample network)
     def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = x.view(-1, 16 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-# downsample input n times 
-# input image has 4 channels (2,2) MaxPool2d
+        x = reversed(x)
+        outs = [x[0]]
+        for i in range(1,self.n):
+            prev_fm = outs[-1]
+            prev_fm = self.unpool(prev_fm)
+            curr_fm = x[i]
+            fm = curr_fm + prev_fm
+            fm = self.comp_block[i](fm)
+            outs.append(fm)
+        return outs
+# down_sample input n times 
+# input image has 64 channels (2,2) MaxPool2d
 # 
 def down_sample(nn.Module):
     def __init__(self,n):
         super(down_sample, self).__init__()
         self.n = n
-        self.block_1 = BasicBlock([4,64,64])
         self.comp_block = [BasicBlock([64,64,64]) for in range(n)]
         self.pool = nn.MaxPool2d(2, 2)
     def forward(self, x):
-        x = block1(x)
-        outs = [x]
         n = self.n
         for i in range(n):
             x = self.comp_block[i](x)
