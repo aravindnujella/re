@@ -235,7 +235,7 @@ class SimpleHGModel(nn.Module):
         return self.class_predictor(down_convs[-1]), self.mask_predictor(up_convs[0])
 
 
-def loss_criteria(gt_mask, pred_mask, gt_class, pred_class):
+def loss_criterion(gt_mask, pred_mask, gt_class, pred_class):
     # if gt_class[0] == 1:
     #     return classfication_loss(gt_class,pred_class)
     # else:
