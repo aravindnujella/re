@@ -151,63 +151,72 @@ class BasicBlock(nn.Module):
             self.layers.append(nn.Conv2d(
                 in_channels=channel_sizes[i], out_channels=channel_sizes[i+1], kernel_size=(3, 3), padding=1))
             self.layers.append(nn.BatchNorm2d(num_features = channel_sizes[i+1],track_running_stats = True))
-        self.comp_block = nn.Sequential(*convs)
+            self.layers.append(nn.ReLU())
+        self.conv_block = nn.Sequential(*layers)
     def forward(self,x):
-        return x + self.comp_block(x)
+        return F.relu(x + self.conv_block(x))
 
 # up_sample input n times with forwarding connections
 # with forwarding shit
 # input has 64 channels intially?
-
+# n =>(w,h)*2**n-1
 class up_sample(nn.Module):
     def __init__(self,n):
         super(up_sample, self).__init__()
         self.n = n
-        self.comp_block = [BasicBlock([64, 64, 64]) for i in range(n)]
+        self.conv_block = [BasicBlock([64, 64, 64]) for i in range(n)]
         self.unpool = nn.Upsample(scale_factor = 2, mode = 'nearest')
 
     # x with smallest channel at the end (output of down_sample network)
     def forward(self, x):
         x = reversed(x)
-        outs = [x[0]]
+        outs = [self.conv_block[0](x[0])]
         for i in range(1,self.n):
             prev_fm = outs[-1]
             prev_fm = self.unpool(prev_fm)
             curr_fm = x[i]
             fm = curr_fm + prev_fm
-            fm = self.comp_block[i](fm)
+            fm = self.conv_block[i](fm)
             outs.append(fm)
         return outs
 # down_sample input n times 
 # input image has 64 channels (2,2) MaxPool2d
-# 
+# n => (w,h)/2**n
 def down_sample(nn.Module):
     def __init__(self,n):
         super(down_sample, self).__init__()
         self.n = n
-        self.comp_block = [BasicBlock([64,64,64]) for in range(n)]
+        self.conv_block = [BasicBlock([64,64,64]) for in range(n)]
         self.pool = nn.MaxPool2d(2, 2)
     def forward(self, x):
         n = self.n
         for i in range(n):
-            x = self.comp_block[i](x)
+            x = self.conv_block[i](x)
             x = self.pool(x)
             outs.append(x)
         return outs
+# class MaskProp(nn.Module):
+#     def __init__(self):
+#         super(MaskProp,self).__init__()
+    # def forward(x):
+        # for inp in x:
+            
 # this is one down_sample and one up_sample
 class HGModel(nn.Module):
     def __init__(self):
         super(HGModel, self).__init__()
         self.down_sampler = down_sample(5)
-        self.up_sampler = up_sample(3)
-        
-        # self.mask_proposal = nn.Sequential(nn.)
-        # self.gap = nn.GlobalAverage...
-        # self.fc = 
+        self.up_sampler = up_sample(4)
+        self.conv1 = nn.Conv2d(in_channels = 4,out_channels = 64,kernel_size = (3,3),padding = 1)
+        self.bn1 = nn.BatchNorm2d(num_features = 64,track_running_stats = True)
+        self.mask_proposal = nn.Sequential(BasicBlock([64,32,16]),nn.Conv2d(16,1,kernel_size = (1,1)))
+        self.classifier = nn.Sequential(BasicBlock([64,128,128]),nn.AvgPool2d((20,20)),nn.Linear(128,81))
     def forward(self, x):
-        input_image = x[0]
-        mask_clue = x[1]
-        downs = self.down_sampler(x)
+        input_image,mask_clue = x
+        # inp = torch.concat(input_image,mask_clue, axis = 1)
+        # inp = self.conv1(inp)
+        # inp = self.bn1(inp)
+        downs = self.down_sampler(inp)
         ups = self.up_sampler(downs)
         
         pred_mask = self.mask_proposal(ups[-1])
