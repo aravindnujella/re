@@ -33,7 +33,8 @@ class CocoDataset(torch.utils.data.Dataset):
             impulse, gt_response, class_id, is_bad_image = self.generate_targets(
                 masks, class_id)
             instance_index += 1
-        return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.from_numpy(class_id)
+        return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.from_numpy(
+            class_id)
 
     def __len__(self):
         return len(self.dataset.instance_info)
@@ -45,12 +46,12 @@ class CocoDataset(torch.utils.data.Dataset):
         # what other bad cases? add them here
         # currently crowd, zero sized masks are flagged as bad instances
         if class_id < 0 or np.sum(mask) == 0:
-            return None,None,None,True
+            return None, None, None, True
         # not bad image
         one_hot_class = np.zeros((num_classes,))
         one_hot_class[class_id] = 1
         # happens when cake on dining table, tie on human etc
-        if np.sum(umask)/np.sum(mask) < 0.3:
+        if np.sum(umask) / np.sum(mask) < 0.3:
             umask = mask
         # currently impulses are produced to fine tune for classification.
         # in future impulse gen code needs to be written
@@ -141,37 +142,42 @@ def get_loader(dataset_cid, config):
                                               num_workers=8)
     return data_loader
 
-# 1) convolve 2) batchnorm 3) add residual 
+# 1) convolve 2) batchnorm 3) add residual
+
+
 class BasicBlock(nn.Module):
-    def __init__(self,channel_sizes):
+    def __init__(self, channel_sizes):
         super(BasicBlock, self).__init__()
         l = len(channel_sizes)
         self.layers = []
-        for i in range(l-1):
+        for i in range(l - 1):
             self.layers.append(nn.Conv2d(
-                in_channels=channel_sizes[i], out_channels=channel_sizes[i+1], kernel_size=(3, 3), padding=1))
-            self.layers.append(nn.BatchNorm2d(num_features = channel_sizes[i+1],track_running_stats = True))
+                in_channels=channel_sizes[i], out_channels=channel_sizes[i + 1], kernel_size=(3, 3), padding=1))
+            self.layers.append(nn.BatchNorm2d(num_features=channel_sizes[i + 1], track_running_stats=True))
             self.layers.append(nn.ReLU())
         self.conv_block = nn.Sequential(*layers)
-    def forward(self,x):
+
+    def forward(self, x):
         return F.relu(x + self.conv_block(x))
 
 # up_sample input n times with forwarding connections
 # with forwarding shit
 # input has 64 channels intially?
 # n =>(w,h)*2**n-1
+
+
 class up_sample(nn.Module):
-    def __init__(self,n):
+    def __init__(self, n):
         super(up_sample, self).__init__()
         self.n = n
         self.conv_block = [BasicBlock([64, 64, 64]) for i in range(n)]
-        self.unpool = nn.Upsample(scale_factor = 2, mode = 'nearest')
+        self.unpool = nn.Upsample(scale_factor=2, mode='nearest')
 
     # x with smallest channel at the end (output of down_sample network)
     def forward(self, x):
         x = reversed(x)
         outs = [self.conv_block[0](x[0])]
-        for i in range(1,self.n):
+        for i in range(1, self.n):
             prev_fm = outs[-1]
             prev_fm = self.unpool(prev_fm)
             curr_fm = x[i]
@@ -179,15 +185,18 @@ class up_sample(nn.Module):
             fm = self.conv_block[i](fm)
             outs.append(fm)
         return outs
-# down_sample input n times 
+# down_sample input n times
 # input image has 64 channels (2,2) MaxPool2d
 # n => (w,h)/2**n
+
+
 def down_sample(nn.Module):
-    def __init__(self,n):
+    def __init__(self, n):
         super(down_sample, self).__init__()
         self.n = n
-        self.conv_block = [BasicBlock([64,64,64]) for in range(n)]
+        self.conv_block = [BasicBlock([64, 64, 64]) for in range(n)]
         self.pool = nn.MaxPool2d(2, 2)
+
     def forward(self, x):
         n = self.n
         for i in range(n):
@@ -200,36 +209,69 @@ def down_sample(nn.Module):
 #         super(MaskProp,self).__init__()
     # def forward(x):
         # for inp in x:
-            
+
+
+class SimpleHGModel(nn.Module):
+    def __init__(self):
+        super(SimpleHGModel, self).__init__()
+
+    def forward(self, x):
+        # inp = torch.concat(x[0],x[1],axis = 1)
+        down_convs = []
+        inp = down_conv_1(inp); down_convs.append(inp); inp = pool(inp)
+        inp = down_conv_2(inp); down_convs.append(inp); inp = pool(inp)
+        inp = down_conv_3(inp); down_convs.append(inp); inp = pool(inp)
+        inp = down_conv_4(inp); down_convs.append(inp); inp = pool(inp)
+        inp = down_conv_5(inp); down_convs.append(inp); inp = pool(inp)
+        inp = down_conv_6(inp); down_convs.append(inp); inp = pool(inp)
+
+        inp = _conv_0(inp);
+
+        up_convs = []
+        inp = up_conv_1(inp + down_convs[-1]); up_convs.append(inp); inp = unpool(inp)
+        inp = up_conv_2(inp + down_convs[-2]); up_convs.append(inp); inp = unpool(inp)
+        inp = up_conv_3(inp + down_convs[-3]); up_convs.append(inp); inp = unpool(inp)
+        inp = up_conv_4(inp + down_convs[-4]); up_convs.append(inp); inp = unpool(inp)
+        inp = up_conv_5(inp + down_convs[-5]); up_convs.append(inp); inp = unpool(inp)
+        inp = up_conv_6(inp + down_convs[-6]); up_convs.append(inp); inp = unpool(inp)
+
 # this is one down_sample and one up_sample
+
+
 class HGModel(nn.Module):
     def __init__(self):
         super(HGModel, self).__init__()
         self.down_sampler = down_sample(5)
         self.up_sampler = up_sample(4)
-        self.conv1 = nn.Conv2d(in_channels = 4,out_channels = 64,kernel_size = (3,3),padding = 1)
-        self.bn1 = nn.BatchNorm2d(num_features = 64,track_running_stats = True)
-        self.mask_proposal = nn.Sequential(BasicBlock([64,32,16]),nn.Conv2d(16,1,kernel_size = (1,1)))
-        self.classifier = nn.Sequential(BasicBlock([64,128,128]),nn.AvgPool2d((20,20)),nn.Linear(128,81))
+        self.conv1 = nn.Conv2d(in_channels=4, out_channels=64, kernel_size=(3, 3), padding=1)
+        self.bn1 = nn.BatchNorm2d(num_features=64, track_running_stats=True)
+        self.mask_proposal = nn.Sequential(BasicBlock([64, 32, 16]), nn.Conv2d(16, 1, kernel_size=(1, 1)))
+        self.classifier = nn.Sequential(BasicBlock([64, 128, 128]), nn.AvgPool2d((20, 20)), nn.Linear(128, 81))
+
     def forward(self, x):
-        input_image,mask_clue = x
+        input_image, mask_clue = x
         # inp = torch.concat(input_image,mask_clue, axis = 1)
         # inp = self.conv1(inp)
         # inp = self.bn1(inp)
         downs = self.down_sampler(inp)
         ups = self.up_sampler(downs)
-        
+
         pred_mask = self.mask_proposal(ups[-1])
         pred_class = self.fc(self.gap(downs[-1]))
-        return mask,pred_class
+        return mask, pred_class
 
-def loss_criteria(gt_mask,pred_mask,gt_class,pred_class):
+
+def loss_criteria(gt_mask, pred_mask, gt_class, pred_class):
     # if gt_class[0] == 1:
     #     return classfication_loss(gt_class,pred_class)
     # else:
     #     return mask_loss(gt_mask,pred_mask) + classification_loss(gt_class,pred_class)
-    return mask_loss(gt_mask,pred_mask) + classification_loss(gt_class,pred_class)
-def mask_loss(gt_mask,pred_mask):
+    return mask_loss(gt_mask, pred_mask) + classification_loss(gt_class, pred_class)
+
+
+def mask_loss(gt_mask, pred_mask):
     return 0
-def classfication_loss(gt_class,pred_class):
+
+
+def classfication_loss(gt_class, pred_class):
     return 0
