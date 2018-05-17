@@ -159,107 +159,50 @@ class BasicBlock(nn.Module):
 
     def forward(self, x):
         return F.relu(x + self.conv_block(x))
-
-# up_sample input n times with forwarding connections
-# with forwarding shit
-# input has 64 channels intially?
-# n =>(w,h)*2**n-1
-
-
-class up_sample(nn.Module):
-    def __init__(self, n):
-        super(up_sample, self).__init__()
-        self.n = n
-        self.conv_block = [BasicBlock([64, 64, 64]) for i in range(n)]
-        self.unpool = nn.Upsample(scale_factor=2, mode='nearest')
-
-    # x with smallest channel at the end (output of down_sample network)
-    def forward(self, x):
-        x = reversed(x)
-        outs = [self.conv_block[0](x[0])]
-        for i in range(1, self.n):
-            prev_fm = outs[-1]
-            prev_fm = self.unpool(prev_fm)
-            curr_fm = x[i]
-            fm = curr_fm + prev_fm
-            fm = self.conv_block[i](fm)
-            outs.append(fm)
-        return outs
-# down_sample input n times
-# input image has 64 channels (2,2) MaxPool2d
-# n => (w,h)/2**n
-
-
-def down_sample(nn.Module):
-    def __init__(self, n):
-        super(down_sample, self).__init__()
-        self.n = n
-        self.conv_block = [BasicBlock([64, 64, 64]) for in range(n)]
-        self.pool = nn.MaxPool2d(2, 2)
-
-    def forward(self, x):
-        n = self.n
-        for i in range(n):
-            x = self.conv_block[i](x)
-            x = self.pool(x)
-            outs.append(x)
-        return outs
-# class MaskProp(nn.Module):
-#     def __init__(self):
-#         super(MaskProp,self).__init__()
-    # def forward(x):
-        # for inp in x:
+# this is one down_sample and one up_sample
 
 
 class SimpleHGModel(nn.Module):
     def __init__(self):
         super(SimpleHGModel, self).__init__()
+        self.down_conv_1 = BasicBlock([64,64,64])
+        self.down_conv_2 = BasicBlock([64,64,64])
+        self.down_conv_3 = BasicBlock([64,64,64])
+        self.down_conv_4 = BasicBlock([64,64,64])
+        self.down_conv_5 = BasicBlock([64,64,64])
+        self.down_conv_6 = BasicBlock([64,64,64])
+
+        self.up_conv_1 = BasicBlock([64,64,64])
+        self.up_conv_2 = BasicBlock([64,64,64])
+        self.up_conv_3 = BasicBlock([64,64,64])
+        self.up_conv_4 = BasicBlock([64,64,64])
+        self.up_conv_5 = BasicBlock([64,64,64])
+        self.up_conv_6 = BasicBlock([64,64,64])
 
     def forward(self, x):
+        # HourGlass
         # inp = torch.concat(x[0],x[1],axis = 1)
         down_convs = []
-        inp = down_conv_1(inp); down_convs.append(inp); inp = pool(inp)
-        inp = down_conv_2(inp); down_convs.append(inp); inp = pool(inp)
-        inp = down_conv_3(inp); down_convs.append(inp); inp = pool(inp)
-        inp = down_conv_4(inp); down_convs.append(inp); inp = pool(inp)
-        inp = down_conv_5(inp); down_convs.append(inp); inp = pool(inp)
-        inp = down_conv_6(inp); down_convs.append(inp); inp = pool(inp)
+        inp = down_conv_1(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
+        inp = down_conv_2(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
+        inp = down_conv_3(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
+        inp = down_conv_4(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
+        inp = down_conv_5(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
+        inp = down_conv_6(inp); down_convs.append(inp); inp = F.max_pool2d(inp,(2,2),2)
 
         inp = _conv_0(inp);
 
         up_convs = []
-        inp = up_conv_1(inp + down_convs[-1]); up_convs.append(inp); inp = unpool(inp)
-        inp = up_conv_2(inp + down_convs[-2]); up_convs.append(inp); inp = unpool(inp)
-        inp = up_conv_3(inp + down_convs[-3]); up_convs.append(inp); inp = unpool(inp)
-        inp = up_conv_4(inp + down_convs[-4]); up_convs.append(inp); inp = unpool(inp)
-        inp = up_conv_5(inp + down_convs[-5]); up_convs.append(inp); inp = unpool(inp)
-        inp = up_conv_6(inp + down_convs[-6]); up_convs.append(inp); inp = unpool(inp)
+        inp = up_conv_1(inp + down_convs[-1]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
+        inp = up_conv_2(inp + down_convs[-2]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
+        inp = up_conv_3(inp + down_convs[-3]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
+        inp = up_conv_4(inp + down_convs[-4]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
+        inp = up_conv_5(inp + down_convs[-5]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
+        inp = up_conv_6(inp + down_convs[-6]); up_convs.append(inp); inp = F.upsample(inp,scale_factor = 2)
 
-# this is one down_sample and one up_sample
-
-
-class HGModel(nn.Module):
-    def __init__(self):
-        super(HGModel, self).__init__()
-        self.down_sampler = down_sample(5)
-        self.up_sampler = up_sample(4)
-        self.conv1 = nn.Conv2d(in_channels=4, out_channels=64, kernel_size=(3, 3), padding=1)
-        self.bn1 = nn.BatchNorm2d(num_features=64, track_running_stats=True)
-        self.mask_proposal = nn.Sequential(BasicBlock([64, 32, 16]), nn.Conv2d(16, 1, kernel_size=(1, 1)))
-        self.classifier = nn.Sequential(BasicBlock([64, 128, 128]), nn.AvgPool2d((20, 20)), nn.Linear(128, 81))
-
-    def forward(self, x):
-        input_image, mask_clue = x
-        # inp = torch.concat(input_image,mask_clue, axis = 1)
-        # inp = self.conv1(inp)
-        # inp = self.bn1(inp)
-        downs = self.down_sampler(inp)
-        ups = self.up_sampler(downs)
-
-        pred_mask = self.mask_proposal(ups[-1])
-        pred_class = self.fc(self.gap(downs[-1]))
-        return mask, pred_class
-
+        # classification
+        down_convs[-1]
+        # Maskprediction
 
 def loss_criteria(gt_mask, pred_mask, gt_class, pred_class):
     # if gt_class[0] == 1:
