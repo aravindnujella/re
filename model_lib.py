@@ -242,53 +242,65 @@ class SimpleHGModel(nn.Module):
         # inp
         down_filter_sizes = [16,32,64,128,256,256]
         bottleneck_filter_sizes = [16,32,64,64,64,64]
-        wing_filter_sizes = [None,None,16,32,256,256]
-        up_filter_sizes = 
+        # wing_filter_sizes = [None,None,16,32,256,256]
+        up_filter_sizes = [256,256,64]
 
-        self.down_conv_filters = {}
-        self.wing_conv_filters = {}
-        self.up_conv_filters = {} 
-        for i in range(6):
-            self.down_conv_filters[i] = BasicBlock(cur_filters,bottleneck_filter_sizes[i],down_filter_sizes[i])
-            if wing_filter_sizes[i] != None:
-                self.wing_conv_filters[i] = BasicBlock(down_filter_sizes[i],bottleneck_filter_sizes[i],wing_filter_sizes[i])
+        # self.down_conv_filters = {}
+        # self.wing_conv_filters = {}
+        # self.up_conv_filters = {} 
+        # for i in range(6):
+        #     self.down_conv_filters[i] = BasicBlock(cur_filters,bottleneck_filter_sizes[i],down_filter_sizes[i])
+        #     if wing_filter_sizes[i] != None:
+        #         self.wing_conv_filters[i] = BasicBlock(down_filter_sizes[i],bottleneck_filter_sizes[i],wing_filter_sizes[i])
                 # self.up_conv_filters[i] = BasicBlock(filter_sizes[i],bottleneck_filter_sizes[i],wing_filter_sizes[i])   
         # bottleneck filters = 64
         # predicted mask will be of shape (80,80,1)
         # num_filters_down = [16,32,64,128,256,512]
         # wing_filters = [_,_,_,64,64,64]
         # 640->(dc6/2)->320->(dc5/2)->160->(dc4/2)->80->(dc3/2)->40->(dc2/2)->20->(dc1(->classify)/2)->10
-        #                                           w             w           w                        w
+        #                                           w             w           w                       
         # 10->(mc0)->10 
         # 80<-(uc3*2)<-40<-(uc2*2)<-20<-(uc1*2)<-10
         # 80->ups*8->640
-        self.down_conv_640 = BasicBlock(64, 64, 16)
+        # 6,5,4,3,2,1,
+        self.down_conv_6 = BasicBlock(cur_filters, 64, down_filter_sizes[-6])
 
-        self.down_conv_320 = BasicBlock(16, 64, 32)
+        self.down_conv_5 = BasicBlock(down_filter_sizes[-6], 64, down_filter_sizes[-5])
 
-        self.down_conv_160 = BasicBlock(32, 64, 64)
+        self.down_conv_4 = BasicBlock(down_filter_sizes[-5], 64, down_filter_sizes[-4])
 
-        self.down_conv_80 = BasicBlock(64, 64, 128)
+        self.down_conv_3 = BasicBlock(down_filter_sizes[-4], 64, down_filter_sizes[-3])
 
-        self.down_conv_40 = BasicBlock(128, 64, 256)
+        self.down_conv_2 = BasicBlock(down_filter_sizes[-3], 64, down_filter_sizes[-2])
 
-        self.down_conv_20 = BasicBlock(256, 64, 512)
+        self.down_conv_1 = BasicBlock(down_filter_sizes[-2], 64, down_filter_sizes[-1])
 
-        self.mid_conv_10 = BasicBlock(512, 64, 512)
+        self.mid_conv_0 = BasicBlock(down_filter_sizes[-1], 64, down_filter_sizes[-1])
 
-        self.up_conv_20 = BasicBlock(512, 64, 256)
+        self.up_conv_1 = BasicBlock(down_filter_sizes[-1], 64, up_filter_sizes[0])
 
-        self.up_conv_40 = BasicBlock(256, 64, 128)
+        self.up_conv_2 = BasicBlock(up_filter_sizes[0], 64, up_filter_sizes[1])
 
-        self.up_conv_80 = BasicBlock(128, 64, 64)
+        self.up_conv_3 = BasicBlock(up_filter_sizes[1], 64, up_filter_sizes[2])
 
-        self.up_conv_160 = BasicBlock(64, 64, 32)
+        # self.up_conv_4 = BasicBlock(up_filter_sizes[2], 64, up_filter_sizes[3])
 
-        self.up_conv_320 = BasicBlock(32, 64, 16)
+        # self.up_conv_5 = BasicBlock(up_filter_sizes[3], 64, up_filter_sizes[4])
 
-        self.up_conv_640 = BasicBlock(16, 64, 8)
+        # self.up_conv_6 = BasicBlock(up_filter_sizes[4], 64, up_filter_sizes[5])
 
-        self.
+        self.wing_conv_1 = BasicBlock(down_filter_sizes[-1], 64, up_filter_sizes[0])
+
+        self.wing_conv_2 = BasicBlock(down_filter_sizes[-2], 64, up_filter_sizes[1])
+
+        self.wing_conv_3 = BasicBlock(down_filter_sizes[-3], 64, up_filter_sizes[2])
+
+        # self.wing_conv_4 = BasicBlock(down_filter_sizes[-4], 64, up_filter_sizes[3])
+
+        # self.wing_conv_5 = BasicBlock(down_filter_sizes[-5], 64, up_filter_sizes[4])
+
+        # self.wing_conv_6 = BasicBlock(down_filter_sizes[-6], 64, up_filter_sizes[5])
+
         self.mask_predictor = MaskProp()
         self.class_predictor = Classifier()
 
@@ -306,37 +318,43 @@ class SimpleHGModel(nn.Module):
         inp = torch.cat([image, impulse], dim=1)
         # 6,6,4 -> 6,6,8
         inp = self.inp_conv_0(inp)
-        down_convs = []
+        wing_convs = []
         # 6,6,8->6,6,16->5,5,16
-        inp = self.down_conv_6(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_6(inp); # wing_convs.append(inp); 
+        inp = F.max_pool2d(inp, (2, 2), 2)
         # 5,5,16->5,5,32->4,4,32
-        inp = self.down_conv_5(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_5(inp); # wing_convs.append(inp); 
+        inp = F.max_pool2d(inp, (2, 2), 2)
         # 4,4,32->4,4,64->3,3,64
-        inp = self.down_conv_4(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_4(inp); # wing_convs.append(inp); 
+        inp = F.max_pool2d(inp, (2, 2), 2)
         # 3,3,64->3,3,128->2,2,128
-        inp = self.down_conv_3(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_3(inp); wing_convs.append(inp); 
+        inp = F.max_pool2d(inp, (2, 2), 2)
         # 2,2,128->2,2,256->1,1,256
-        inp = self.down_conv_2(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_2(inp); wing_convs.append(inp); 
+        inp = F.max_pool2d(inp, (2, 2), 2)
         # 1,1,256->1,1,512->0,0,512
-        inp = self.down_conv_1(inp); down_convs.append(inp); inp = F.max_pool2d(inp, (2, 2), 2)
+        inp = self.down_conv_1(inp); wing_convs.append(inp); 
+        inp = F.max_pool2d(inp, (2, 2), 2)
         # 0,0,512->0,0,512
         inp = self.mid_conv_0(inp);
         # up_convs = []
         # 1,1,256<-1,1,512<-0,0,512
-        inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_1(inp + down_convs[-1]); # up_convs.append(inp)
+        inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_1(inp + wing_convs[-1]); # up_convs.append(inp)
         # 2,2,128<-2,2,256<-1,1,256
-        inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_2(inp + down_convs[-2]); # up_convs.append(inp)
+        inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_2(inp + wing_convs[-2]); # up_convs.append(inp)
         # 3,3,64<-3,3,128<-2,2,128        
-        inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_3(inp + down_convs[-3]); # up_convs.append(inp)
+        inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_3(inp + wing_convs[-3]); # up_convs.append(inp)
         # 4,4,32<-4,4,64<-3,3,64
-        inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_4(inp + down_convs[-4]); # up_convs.append(inp)
-        # 5,5,16<-5,5,32<-4,4,32
-        inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_5(inp + down_convs[-5]); # up_convs.append(inp)
-        # 6,6,8<-6,6,16<-5,5,16
-        inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_6(inp + down_convs[-6]); # up_convs.append(inp)
+        # inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_4(inp + wing_convs[-4]); # up_convs.append(inp)
+        # # 5,5,16<-5,5,32<-4,4,32
+        # inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_5(inp + wing_convs[-5]); # up_convs.append(inp)
+        # # 6,6,8<-6,6,16<-5,5,16
+        # inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_6(inp + wing_convs[-6]); # up_convs.append(inp)
 
         # Maskprediction, classification
-        return self.class_predictor(down_convs[-1]), self.mask_predictor(inp)
+        return self.class_predictor(wing_convs[-1]), self.mask_predictor(inp)
 
 
 def loss_criterion(gt_mask, pred_mask, gt_class, pred_class):
