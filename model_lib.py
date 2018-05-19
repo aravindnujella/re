@@ -25,34 +25,39 @@ class CocoDataset(torch.utils.data.Dataset):
     def __init__(self, dataset, config):
         self.dataset = dataset
         self.config = config
-
+        self.cw_num_instances = [len(c) for c in dataset.class_wise_instance_info]
+        self.class_ids = range(config.NUM_CLASSES)
+        # class_wise_iterators
+        self.cw_iter = [0 for i in range(config.NUM_CLASSES)]
+    # regardless of instance_index, we give some shit. 
+    # shouldn't matter anyway because of blah blah
     def __getitem__(self, instance_index):
+        class_id = random.choice(self.class_ids)
         impulse, gt_response, class_id, is_bad_image = None, None, None, True
         # skipping bad images. is this bad?
         while is_bad_image:
-            image, masks, class_id = self.load_image_gt(instance_index)
+            image, masks, class_id = self.load_image_gt(class_id,self.cw_iter[class_id])
+            image -= self.config.MEAN_PIXEL
             impulse, gt_response, class_id, is_bad_image = self.generate_targets(
                 masks, class_id)
-            if is_bad_image:
-                instance_index += 1
-                continue
-            else:
+            if not is_bad_image:
                 # channels first
                 image = np.moveaxis(image, 2, 0).astype(np.float32)
                 impulse = np.moveaxis(np.expand_dims(impulse, -1), 2, 0).astype(np.float32)
                 gt_response = np.moveaxis(np.expand_dims(gt_response, -1), 2, 0).astype(np.float32)
-                break
-        # print(class_id,"hey")
-        return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
+                self.cw_iter[class_id] = (self.cw_iter[class_id] + 1)%self.cw_num_instances[class_id]
+                return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
             class_id,dtype=torch.long)
+            self.cw_iter[class_id] = (self.cw_iter[class_id] + 1)%self.cw_num_instances[class_id]
+        # print(class_id,"hey")
 
     def __len__(self):
         return len(self.dataset.instance_info)
 
     def generate_targets(self, masks, class_id):
         num_classes = self.config.NUM_CLASSES
-        mask = masks[:, :, 0]
-        umask = masks[:, :, 1]
+        mask = masks[:, :, 0]*255
+        umask = masks[:, :, 1]*255
         # what other bad cases? add them here
         # currently crowd, zero sized masks are flagged as bad instances
         if class_id < 0 or np.sum(mask) == 0:
@@ -113,13 +118,15 @@ class CocoDataset(torch.utils.data.Dataset):
             image = skimage.color.gray2rgb(image)
         return image.astype(np.float32)
 
-    def load_image_gt(self, image_id):
+    def load_image_gt(self, class_id, cwid):
         config = self.config
         dataset = self.dataset
-        instance_info = dataset.instance_info[image_id]
+        # dont train on unlucky images. they are bad omen and model wont converge
+        cwid = cwid%self.cw_num_instances[class_id]
+        instance_info = dataset.class_wise_instance_info[class_id][cwid]
         image_path = instance_info["image_path"]
         mask_obj = instance_info["mask_obj"]
-        class_id = instance_info["class_id"]
+        # class_id = instance_info["class_id"]
 
         image = self.read_image(image_path)
         masks = maskUtils.decode(mask_obj)
@@ -154,30 +161,38 @@ def get_loader(dataset_cid, config):
 
 # 1) convolve 2) batchnorm 3) add residual
 
-
 class BasicBlock(nn.Module):
+    def __init__(self,in_planes,mid_planes,out_planes,fr=(3,3)):
+        # in_planes are mapped to out_planes by a bottleneck like connection,
+        # mid_planes only get 3,3 kernel size convs -> used to control no. of parms 
+        # if more feature mixing is needed, use more of these
+        pad = ((fr[0]-1)//2,(fr[1]-1)//2)
+        self.conv1 = nn.Conv2d(in_planes,mid_planes,kernel_size=(1,1))
+        self.bn1 = nn.BatchNorm2d(in_planes)
+        self.conv2 = nn.Conv2d(mid_planes,mid_planes,kernel_size = fr,padding = pad)
+        self.bn2 = nn.BatchNorm2d(mid_planes)
+        self.conv3 = nn.Conv2d(mid_planes,out_planes,kernel_size=(1,1))
+        self.bn3 = nn.BatchNorm2d(out_planes)
+        # highway is a direct linear transform on input to match output dimensions
+        self.highway = nn.Conv2d(in_planes,out_planes,kernel_size=(1,1))
 
-    def __init__(self, channel_sizes, expand_channels=0):
-        super(BasicBlock, self).__init__()
-        l = len(channel_sizes)
-        layers = []
-        for i in range(l - 1):
-            layers.append(nn.Conv2d(
-                in_channels=channel_sizes[i], out_channels=channel_sizes[i + 1], kernel_size=(3, 3), padding=1))
-            layers.append(nn.BatchNorm2d(num_features=channel_sizes[i + 1], track_running_stats=True))
-            layers.append(nn.ReLU())
-        self.conv_block = nn.Sequential(*layers)
-        # expand_block: expands to channel_sizes[-1] by default.
-        # o.w. expands to specified number of channels using (1,1) convolutions
-        if expand_channels == 0:
-            expand_channels = channel_sizes[-1]
-        self.expand_block = nn.Sequential(nn.Conv2d(channel_sizes[-1], expand_channels, kernel_size=(1, 1)),
-                                          nn.BatchNorm2d(num_features=expand_channels, track_running_stats=True),
-                                          nn.ReLU())
+    def forward(self,x):
+        residual = self.highway(x)
 
-    def forward(self, x):
-        x = F.relu(x + self.conv_block(x))
-        x = self.expand_block(x)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+
+        x += residual
+
         return x
 
 # proposes masks for single scale feature maps.
@@ -203,7 +218,7 @@ class Classifier(nn.Module):
 
     def __init__(self):
         super(Classifier, self).__init__()
-        self.bb1 = BasicBlock([512, 512, 512],512)
+        self.bb1 = BasicBlock(512,64,512)
         self.gap = nn.AvgPool2d((10, 10), stride=1)
         self.fc = nn.Linear(512, 81)
 
@@ -221,36 +236,68 @@ class SimpleHGModel(nn.Module):
 
     def __init__(self):
         super(SimpleHGModel, self).__init__()
-        self.inp_conv_0 = nn.Conv2d(4, 8, (7, 7), padding=3)
+        self.look_up = {}
+        cur_filters = 16
+        self.inp_conv_0 = nn.Conv2d(4, cur_filters, (7, 7), padding=(3,3))
+        # inp
+        down_filter_sizes = [16,32,64,128,256,256]
+        bottleneck_filter_sizes = [16,32,64,64,64,64]
+        wing_filter_sizes = [None,None,16,32,256,256]
+        up_filter_sizes = 
 
-        self.down_conv_6 = BasicBlock([8, 8, 8], 16)
+        self.down_conv_filters = {}
+        self.wing_conv_filters = {}
+        self.up_conv_filters = {} 
+        for i in range(6):
+            self.down_conv_filters[i] = BasicBlock(cur_filters,bottleneck_filter_sizes[i],down_filter_sizes[i])
+            if wing_filter_sizes[i] != None:
+                self.wing_conv_filters[i] = BasicBlock(down_filter_sizes[i],bottleneck_filter_sizes[i],wing_filter_sizes[i])
+                # self.up_conv_filters[i] = BasicBlock(filter_sizes[i],bottleneck_filter_sizes[i],wing_filter_sizes[i])   
+        # bottleneck filters = 64
+        # predicted mask will be of shape (80,80,1)
+        # num_filters_down = [16,32,64,128,256,512]
+        # wing_filters = [_,_,_,64,64,64]
+        # 640->(dc6/2)->320->(dc5/2)->160->(dc4/2)->80->(dc3/2)->40->(dc2/2)->20->(dc1(->classify)/2)->10
+        #                                           w             w           w                        w
+        # 10->(mc0)->10 
+        # 80<-(uc3*2)<-40<-(uc2*2)<-20<-(uc1*2)<-10
+        # 80->ups*8->640
+        self.down_conv_640 = BasicBlock(64, 64, 16)
 
-        self.down_conv_5 = BasicBlock([16, 16, 16], 32)
+        self.down_conv_320 = BasicBlock(16, 64, 32)
 
-        self.down_conv_4 = BasicBlock([32, 32, 32], 64)
+        self.down_conv_160 = BasicBlock(32, 64, 64)
 
-        self.down_conv_3 = BasicBlock([64, 64, 64], 128)
+        self.down_conv_80 = BasicBlock(64, 64, 128)
 
-        self.down_conv_2 = BasicBlock([128, 128, 128], 256)
+        self.down_conv_40 = BasicBlock(128, 64, 256)
 
-        self.down_conv_1 = BasicBlock([256, 256, 256], 512)
+        self.down_conv_20 = BasicBlock(256, 64, 512)
 
-        self.mid_conv_0 = BasicBlock([512, 512, 512], 512)
+        self.mid_conv_10 = BasicBlock(512, 64, 512)
 
-        self.up_conv_1 = BasicBlock([512, 512, 512], 256)
+        self.up_conv_20 = BasicBlock(512, 64, 256)
 
-        self.up_conv_2 = BasicBlock([256, 256, 256], 128)
+        self.up_conv_40 = BasicBlock(256, 64, 128)
 
-        self.up_conv_3 = BasicBlock([128, 128, 128], 64)
+        self.up_conv_80 = BasicBlock(128, 64, 64)
 
-        self.up_conv_4 = BasicBlock([64, 64, 64], 32)
+        self.up_conv_160 = BasicBlock(64, 64, 32)
 
-        self.up_conv_5 = BasicBlock([32, 32, 32], 16)
+        self.up_conv_320 = BasicBlock(32, 64, 16)
 
-        self.up_conv_6 = BasicBlock([16, 16, 16], 8)
+        self.up_conv_640 = BasicBlock(16, 64, 8)
 
+        self.
         self.mask_predictor = MaskProp()
         self.class_predictor = Classifier()
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         # HourGlass
@@ -309,3 +356,11 @@ def mask_loss(gt_mask, pred_mask):
 def classification_loss(gt_class, pred_class):
     _loss = nn.CrossEntropyLoss()
     return _loss(pred_class, gt_class)
+
+
+# TODO: modify dummy stub to train code or inference code
+def main():
+
+    return 0
+if __name__ == '__main__':
+    main()
