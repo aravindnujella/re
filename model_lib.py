@@ -228,7 +228,7 @@ class Classifier(nn.Module):
         x = self.bb1(x)
         x = F.max_pool2d(x, (2, 2), 2)
         x = self.gap(x)
-        x = x.view(-1, 128)
+        x = x.view(-1, 64)
         x = self.fc(x)
         return x
 
@@ -258,13 +258,13 @@ class SimpleHGModel(nn.Module):
 
         self.down_conv_1 = BasicBlock(down_filter_sizes[-2], 64, down_filter_sizes[-1])
 
-        self.mid_conv_0 = BasicBlock(down_filter_sizes[-1], 64, up_filter_sizes[0])
+        # self.mid_conv_0 = BasicBlock(down_filter_sizes[-1], 64, up_filter_sizes[0])
 
-        self.up_conv_1 = BasicBlock(up_filter_sizes[0], 64, up_filter_sizes[1])
+        # self.up_conv_1 = BasicBlock(up_filter_sizes[0], 64, up_filter_sizes[1])
 
-        self.up_conv_2 = BasicBlock(up_filter_sizes[1], 64, up_filter_sizes[2])
+        # self.up_conv_2 = BasicBlock(up_filter_sizes[1], 64, up_filter_sizes[2])
 
-        self.up_conv_3 = BasicBlock(up_filter_sizes[2], 64, up_filter_sizes[3])
+        # self.up_conv_3 = BasicBlock(up_filter_sizes[2], 64, up_filter_sizes[3])
 
         # self.up_conv_4 = BasicBlock(up_filter_sizes[3], 64, up_filter_sizes[4])
 
@@ -274,9 +274,9 @@ class SimpleHGModel(nn.Module):
 
         self.wing_conv_1 = BasicBlock(down_filter_sizes[-1], 64, up_filter_sizes[0])
 
-        self.wing_conv_2 = BasicBlock(down_filter_sizes[-2], 64, up_filter_sizes[1])
+        # self.wing_conv_2 = BasicBlock(down_filter_sizes[-2], 64, up_filter_sizes[1])
 
-        self.wing_conv_3 = BasicBlock(down_filter_sizes[-3], 64, up_filter_sizes[2])
+        # self.wing_conv_3 = BasicBlock(down_filter_sizes[-3], 64, up_filter_sizes[2])
 
         # self.wing_conv_4 = BasicBlock(down_filter_sizes[-4], 64, up_filter_sizes[3])
 
@@ -284,12 +284,12 @@ class SimpleHGModel(nn.Module):
 
         # self.wing_conv_6 = BasicBlock(down_filter_sizes[-6], 64, up_filter_sizes[5])
 
-        self.mask_predictor = MaskProp(up_filter_sizes[3])
+        # self.mask_predictor = MaskProp(up_filter_sizes[3])
         self.class_predictor = Classifier(up_filter_sizes[0])
 
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+        # for m in self.modules():
+        #     if isinstance(m, nn.Conv2d):
+        #         nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             # elif isinstance(m, nn.BatchNorm2d):
             #     nn.init.constant_(m.weight, 128)
             #     nn.init.constant_(m.bias, 0)
@@ -318,7 +318,7 @@ class SimpleHGModel(nn.Module):
         inp = self.down_conv_2(inp);# wing_convs.append(self.wing_conv_2(inp)); 
         inp = F.max_pool2d(inp, (2, 2), 2)
         # 1,1,256->1,1,512->0,0,512
-        inp = self.down_conv_1(inp);# wing_convs.append(self.wing_conv_1(inp)); 
+        inp = self.down_conv_1(inp); wing_convs.append(self.wing_conv_1(inp)); 
         # inp = F.max_pool2d(inp, (2, 2), 2)
         # 0,0,512->0,0,512
         # inp = self.mid_conv_0(inp);
@@ -337,7 +337,7 @@ class SimpleHGModel(nn.Module):
         # inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_6(inp + wing_convs[-6]); # up_convs.append(inp)
 
         # Maskprediction, classification
-        return self.class_predictor(inp) # F.upsample(self.mask_predictor(inp),scale_factor = 8)
+        return self.class_predictor(wing_convs[-1]) # F.upsample(self.mask_predictor(inp),scale_factor = 8)
 
 
 def loss_criterion(gt_mask, pred_mask, gt_class, pred_class):
