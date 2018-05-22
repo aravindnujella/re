@@ -31,6 +31,7 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
         self.sampler = self.weighted_sampler()
     # regardless of instance_index, we give some shit.
     # shouldn't matter anyway because of blah blah
+
     def __getitem__(self, instance_index):
         # skipping bad images. is this bad?
         # caution: cw dataset didnt note if its a crowd. needs fixing
@@ -46,17 +47,20 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
                 image -= self.config.MEAN_PIXEL
                 image = image / 128
                 image = np.moveaxis(image, 2, 0)
+                one_hot = np.zeros(81).astype(np.float32)
+                one_hot[class_id] = 1
                 impulse = np.moveaxis(np.expand_dims(impulse, -1), 2, 0).astype(np.float32)
                 gt_response = np.moveaxis(np.expand_dims(gt_response, -1), 2, 0).astype(np.float32)
                 return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
-                        class_id, dtype=torch.long)
+                    one_hot)
             else:
                 instance_index += 1
+
     def __len__(self):
         return len(self.dataset.instance_info)
 
     def weighted_sampler(self):
-    #     # TODO: repeatedly take am between median and freq
+        #     # TODO: repeatedly take am between median and freq
         class_weighting = np.array(self.cw_num_instances)**0.5
         # adjust number of bg instances reweighting
         class_weighting[0] = np.median(class_weighting)
@@ -154,6 +158,7 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
             masks = np.fliplr(masks)
         return image, masks, class_id
 
+
 class CocoDataset_ins(torch.utils.data.Dataset):
 
     def __init__(self, dataset, config):
@@ -175,12 +180,15 @@ class CocoDataset_ins(torch.utils.data.Dataset):
                 image -= self.config.MEAN_PIXEL
                 image = image / 128
                 image = np.moveaxis(image, 2, 0)
+                one_hot = np.zeros(81).astype(np.float32)
+                one_hot[class_id] = 1
                 impulse = np.moveaxis(np.expand_dims(impulse, -1), 2, 0).astype(np.float32)
                 gt_response = np.moveaxis(np.expand_dims(gt_response, -1), 2, 0).astype(np.float32)
                 return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
-                        class_id, dtype=torch.long)
+                    one_hot)
             else:
                 instance_index += 1
+
     def __len__(self):
         return len(self.dataset.instance_info)
 
@@ -267,7 +275,7 @@ class CocoDataset_ins(torch.utils.data.Dataset):
         return image, masks, class_id
 
 
-# write custom collate to delete bad instances? 
+# write custom collate to delete bad instances?
 # not doing this because some times we might get all bad images
 # batch = list of (images,impulse,gt_response,class_id)
 # def _collate_fn(batch):
@@ -276,12 +284,12 @@ class CocoDataset_ins(torch.utils.data.Dataset):
 # we take cid object from main (ugly interface)
 
 
-def get_loader(dataset_cid, config,data_order="ins"):
+def get_loader(dataset_cid, config, data_order="ins"):
     coco_dataset = None
     if data_order == "cw_ins":
         coco_dataset = CocoDataset_cw_ins(dataset_cid, config)
     else:
-        coco_dataset = CocoDataset_ins(dataset_cid, config)  
+        coco_dataset = CocoDataset_ins(dataset_cid, config)
     data_loader = torch.utils.data.DataLoader(dataset=coco_dataset,
                                               batch_size=config.BATCH_SIZE,
                                               # collate_fn=_collate_fn,
@@ -447,7 +455,7 @@ class SimpleHGModel(nn.Module):
         inp = self.down_conv_3(inp);  # wing_convs.append(self.wing_conv_3(inp));
         inp = F.max_pool2d(inp, (2, 2), 2)
         # 2,2,128->2,2,256->1,1,256
-        inp = self.down_conv_2(inp); # wing_convs.append(self.wing_conv_2(inp));
+        inp = self.down_conv_2(inp);  # wing_convs.append(self.wing_conv_2(inp));
         inp = F.max_pool2d(inp, (2, 2), 2)
         # 1,1,256->1,1,512->0,0,512
         inp = self.down_conv_1(inp); wing_convs.append(self.wing_conv_1(inp));
@@ -472,24 +480,32 @@ class SimpleHGModel(nn.Module):
         return self.class_predictor(wing_convs[-1])  # F.upsample(self.mask_predictor(inp),scale_factor = 8)
 
 
-def loss_criterion(gt_mask, pred_mask, gt_class, pred_class):
+def loss_criterion(pred_mask, gt_mask, pred_class, gt_class,class_weighting):
     # if gt_class[0] == 1:
-    #     return classification_loss(gt_class,pred_class)
+    #     return classification_loss(pred_class,gt_class)
     # else:
-    #     return mask_loss(gt_mask,pred_mask) + classification_loss(gt_class,pred_class)
-    # return mask_loss(gt_mask, pred_mask) #+ classification_loss(gt_class, pred_class)
-    return classification_loss(gt_class, pred_class)
+    #     return mask_loss(pred_mask,gt_mask) + classification_loss(pred_class,gt_class)
+    # return mask_loss(pred_mask, gt_mask) #+ classification_loss(pred_class, gt_class)
+    return classification_loss(pred_class, gt_class, class_weighting)
 
-
-def mask_loss(gt_mask, pred_mask):
+# pred_mask: N,1,w,h
+# gt_mask: N,1,w,h
+def mask_loss(pred_mask, gt_mask):
     # need to modify this
-    _loss = nn.SoftMarginLoss(reduce=True)
+    # mask_shape = pred_mask.shape[2:]
+    # F.max_pool2d()
+    fg_size = gt_mask.squeeze().sum(-1).sum(-1).view(-1,1,1,1)
+    bg_size = (1-gt_mask).squeeze().sum(-1).sum(-1).view(-1,1,1,1)
+    # bgfg_weighting = (gt_mask== 1).float()/fg_size + (gt_mask == 0).float()/bg_size
+    bgfg_weighting = gt_mask + (gt_mask == 0).float()*fg_size/bg_size
+    _loss = nn.BCEWithLogitsLoss(weight=bgfg_weighting)
     return _loss(pred_mask, gt_mask)
 
 
-def classification_loss(gt_class, pred_class):
-    _loss = nn.CrossEntropyLoss()
-    return _loss(pred_class, gt_class)
+def classification_loss(pred_class, gt_class, class_weighting):
+    # _loss = nn.CrossEntropyLoss()
+    _loss = nn.BCEWithLogitsLoss(weight=class_weighting)
+    return 81*_loss(pred_class, gt_class)
 
 
 # TODO: modify dummy stub to train code or inference code
