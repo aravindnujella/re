@@ -82,7 +82,7 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
         umask = masks[:, :, 1]
         # what other bad cases? add them here
         # currently crowd, small sized masks are flagged as bad instances
-        if class_id < 0 or np.sum(mask) < 256:
+        if class_id <= 0 or np.sum(mask) < 256:
             return None, None, None, True
         if np.sum(umask) / np.sum(mask) < 0.3:
             umask = mask
@@ -198,7 +198,7 @@ class CocoDataset_ins(torch.utils.data.Dataset):
         umask = masks[:, :, 1]
         # what other bad cases? add them here
         # currently crowd, small sized masks are flagged as bad instances
-        if class_id < 0 or np.sum(mask) < 256:
+        if class_id <= 0 or np.sum(mask) < 256:
             return None, None, None, True
         if np.sum(umask) / np.sum(mask) < 0.3:
             umask = mask
@@ -316,23 +316,25 @@ class BasicBlock(nn.Module):
         self.bn3 = nn.BatchNorm2d(out_planes)
         # highway is a direct linear transform on input to match output dimensions
         self.highway = nn.Conv2d(in_planes, out_planes, kernel_size=(1, 1))
+        self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
-        # residual = self.highway(x)
+        residual = self.highway(x)
 
         x = self.conv1(x)
         x = self.bn1(x)
-        x = F.relu(x)
+        x = self.relu(x)
 
         x = self.conv2(x)
         x = self.bn2(x)
-        x = F.relu(x)
+        x = self.relu(x)
 
         x = self.conv3(x)
         x = self.bn3(x)
-        x = F.relu(x)
+        x = self.relu(x)
 
-        # x += residual
+        x += residual
+        x = self.relu(x)
 
         return x
 
@@ -486,7 +488,7 @@ def loss_criterion(pred_mask, gt_mask, pred_class, gt_class,class_weighting):
     # else:
     #     return mask_loss(pred_mask,gt_mask) + classification_loss(pred_class,gt_class)
     # return mask_loss(pred_mask, gt_mask) #+ classification_loss(pred_class, gt_class)
-    return classification_loss(pred_class, gt_class, class_weighting)
+    # return classification_loss(pred_class, gt_class, class_weighting)
 
 # pred_mask: N,1,w,h
 # gt_mask: N,1,w,h
