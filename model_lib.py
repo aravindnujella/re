@@ -1,5 +1,6 @@
 import os
 import numpy as np
+from PIL import Image
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 from pycocotools import mask as maskUtils
@@ -11,7 +12,6 @@ import random
 import numpy as np
 import time
 import pickle
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,6 +35,7 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
     def __getitem__(self, instance_index):
         # skipping bad images. is this bad?
         # caution: cw dataset didnt note if its a crowd. needs fixing
+        # start = time.time()
         while True:
             class_id = next(self.sampler)
             # !! no guarantees that we iterate all elements !!
@@ -51,6 +52,7 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
                 one_hot[class_id] = 1
                 impulse = np.moveaxis(np.expand_dims(impulse, -1), 2, 0).astype(np.float32)
                 gt_response = np.moveaxis(np.expand_dims(gt_response, -1), 2, 0).astype(np.float32)
+                # print(time.time()-start,"get_item")
                 return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
                     one_hot)
             else:
@@ -131,10 +133,15 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
         return mask
 
     def read_image(self, image_path):
-        image = skimage.io.imread(image_path)
-        if image.ndim != 3:
-            image = skimage.color.gray2rgb(image)
-        return image
+        # start = time.time() 
+        with open(image_path,"rb") as f:
+            image = Image.open(f)
+            # print(time.time()-start," per image")
+            return image.convert('RGB')
+        # image = skimage.io.imread(image_path)
+        # if image.ndim != 3:
+        #     image = skimage.color.gray2rgb(image)
+        # return image
 
     def load_image_gt(self, class_id, cwid):
         config = self.config
@@ -171,9 +178,12 @@ class CocoDataset_ins(torch.utils.data.Dataset):
     # shouldn't matter anyway because of blah blah
     def __getitem__(self, instance_index):
         # skipping bad images. is this bad?
+        start = time.time()
         while True:
             image, masks, class_id = self.load_image_gt(instance_index)
+            # print(time.time()-start,"load image gt")
             impulse, gt_response, class_id, is_bad_image = self.generate_targets(masks, class_id)
+            # print(time.time()-start,"generate_targets")
             if not is_bad_image:
                 # channels first
                 image = image.astype(np.float32)
@@ -184,6 +194,7 @@ class CocoDataset_ins(torch.utils.data.Dataset):
                 one_hot[class_id] = 1
                 impulse = np.moveaxis(np.expand_dims(impulse, -1), 2, 0).astype(np.float32)
                 gt_response = np.moveaxis(np.expand_dims(gt_response, -1), 2, 0).astype(np.float32)
+                # print(time.time()-start,"get_item")
                 return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
                     one_hot)
             else:
@@ -247,10 +258,11 @@ class CocoDataset_ins(torch.utils.data.Dataset):
         return mask
 
     def read_image(self, image_path):
-        image = skimage.io.imread(image_path)
-        if image.ndim != 3:
-            image = skimage.color.gray2rgb(image)
-        return image
+        # start = time.time() 
+        with open(image_path,"rb") as f:
+            image = Image.open(f)
+            # print(time.time()-start," per image")
+            return np.array(image.convert('RGB'))
 
     def load_image_gt(self, instance_index):
         config = self.config
@@ -260,9 +272,13 @@ class CocoDataset_ins(torch.utils.data.Dataset):
         mask_obj = instance_info["mask_obj"]
         class_id = instance_info["class_id"]
 
+        start = time.time()
         image = self.read_image(image_path)
+        # print(time.time()-start,"read image only")
+        t = time.time()
         masks = maskUtils.decode(mask_obj)
-
+        # print(t-start,"mask decode time")
+        # print(time.time()-start,"read_image + decode mask")
         image, window, scale, padding = self.resize_image(
             image,
             min_dim=config.WIDTH,
@@ -278,9 +294,13 @@ class CocoDataset_ins(torch.utils.data.Dataset):
 # write custom collate to delete bad instances?
 # not doing this because some times we might get all bad images
 # batch = list of (images,impulse,gt_response,class_id)
-# def _collate_fn(batch):
-#     batch = filter(lambda x: x is not None, batch)
-#     return torch.utils.data.dataloader.default_collate(list(batch))
+def _collate_fn(batch):
+    # batch = filter(lambda x: x is not None, batch)
+    start = time.time()
+    x = torch.utils.data.dataloader.default_collate(batch)
+    end = time.time()
+    print(end-start," batch_collate")
+    return x
 # we take cid object from main (ugly interface)
 
 
@@ -292,9 +312,9 @@ def get_loader(dataset_cid, config, data_order="ins"):
         coco_dataset = CocoDataset_ins(dataset_cid, config)
     data_loader = torch.utils.data.DataLoader(dataset=coco_dataset,
                                               batch_size=config.BATCH_SIZE,
-                                              # collate_fn=_collate_fn,
+                                              collate_fn=_collate_fn,
                                               shuffle=True,
-                                              num_workers=16)
+                                              num_workers=32)
     return data_loader
 
 # 1) convolve 2) batchnorm 3) add residual
@@ -488,7 +508,7 @@ def loss_criterion(pred_mask, gt_mask, pred_class, gt_class,class_weighting):
     # else:
     #     return mask_loss(pred_mask,gt_mask) + classification_loss(pred_class,gt_class)
     # return mask_loss(pred_mask, gt_mask) #+ classification_loss(pred_class, gt_class)
-    # return classification_loss(pred_class, gt_class, class_weighting)
+    return classification_loss(pred_class, gt_class, class_weighting)
 
 # pred_mask: N,1,w,h
 # gt_mask: N,1,w,h
