@@ -20,7 +20,7 @@ import torch.utils.data
 from torch.autograd import Variable
 
 
-class CocoDataset_cw_ins(torch.utils.data.Dataset):
+class CocoDataset(torch.utils.data.Dataset):
 
     def __init__(self, dataset, config):
         self.dataset = dataset
@@ -33,9 +33,6 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
     # shouldn't matter anyway because of blah blah
 
     def __getitem__(self, instance_index):
-        # skipping bad images. is this bad?
-        # caution: cw dataset didnt note if its a crowd. needs fixing
-        # start = time.time()
         while True:
             class_id = next(self.sampler)
             # !! no guarantees that we iterate all elements !!
@@ -52,17 +49,16 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
                 one_hot[class_id] = 1
                 impulse = np.moveaxis(np.expand_dims(impulse, -1), 2, 0).astype(np.float32)
                 gt_response = np.moveaxis(np.expand_dims(gt_response, -1), 2, 0).astype(np.float32)
-                # print(time.time()-start,"get_item")
                 return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
                     one_hot)
             else:
                 instance_index += 1
 
     def __len__(self):
-        return len(self.dataset.instance_info)
+        return sum(self.cw_num_instances)
 
     def weighted_sampler(self):
-        #     # TODO: repeatedly take am between median and freq
+        config = self.config
         class_weighting = np.array(self.cw_num_instances)**0.5
         # adjust number of bg instances reweighting
         class_weighting[0] = np.median(class_weighting)
@@ -70,13 +66,6 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
         np.random.seed()
         while True:
             yield np.random.choice(self.class_ids, p=class_weighting)
-    # def set_sampler_weights(self):
-    #     # TODO: repeatedly take am between median and freq
-    #     class_weighting = np.array(self.cw_num_instances)**0.5
-    #     # adjust number of bg instances reweighting
-    #     class_weighting[0] = np.median(class_weighting)
-    #     class_weighting = class_weighting / np.sum(class_weighting)
-    #     self.class_weighting = class_weighting
 
     def generate_targets(self, masks, class_id):
         num_classes = self.config.NUM_CLASSES
@@ -133,15 +122,10 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
         return mask
 
     def read_image(self, image_path):
-        # start = time.time() 
-        with open(image_path,"rb") as f:
-            image = Image.open(f)
-            # print(time.time()-start," per image")
-            return image.convert('RGB')
-        # image = skimage.io.imread(image_path)
-        # if image.ndim != 3:
-        #     image = skimage.color.gray2rgb(image)
-        # return image
+        image = skimage.io.imread(image_path)
+        if image.ndim != 3:
+            image = skimage.color.gray2rgb(image)
+        return image
 
     def load_image_gt(self, class_id, cwid):
         config = self.config
@@ -149,7 +133,6 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
         instance_info = dataset.class_wise_instance_info[class_id][cwid]
         image_path = instance_info["image_path"]
         mask_obj = instance_info["mask_obj"]
-        # class_id = instance_info["class_id"]
 
         image = self.read_image(image_path)
         masks = maskUtils.decode(mask_obj)
@@ -165,154 +148,11 @@ class CocoDataset_cw_ins(torch.utils.data.Dataset):
             masks = np.fliplr(masks)
         return image, masks, class_id
 
-
-class CocoDataset_ins(torch.utils.data.Dataset):
-
-    def __init__(self, dataset, config):
-        self.dataset = dataset
-        self.config = config
-        self.cw_num_instances = [len(c) for c in dataset.class_wise_instance_info]
-        self.class_ids = range(config.NUM_CLASSES)
-
-    # regardless of instance_index, we give some shit.
-    # shouldn't matter anyway because of blah blah
-    def __getitem__(self, instance_index):
-        # skipping bad images. is this bad?
-        start = time.time()
-        while True:
-            image, masks, class_id = self.load_image_gt(instance_index)
-            # print(time.time()-start,"load image gt")
-            impulse, gt_response, class_id, is_bad_image = self.generate_targets(masks, class_id)
-            # print(time.time()-start,"generate_targets")
-            if not is_bad_image:
-                # channels first
-                image = image.astype(np.float32)
-                image -= self.config.MEAN_PIXEL
-                image = image / 128
-                image = np.moveaxis(image, 2, 0)
-                one_hot = np.zeros(81).astype(np.float32)
-                one_hot[class_id] = 1
-                impulse = np.moveaxis(np.expand_dims(impulse, -1), 2, 0).astype(np.float32)
-                gt_response = np.moveaxis(np.expand_dims(gt_response, -1), 2, 0).astype(np.float32)
-                # print(time.time()-start,"get_item")
-                return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
-                    one_hot)
-            else:
-                instance_index += 1
-
-    def __len__(self):
-        return len(self.dataset.instance_info)
-
-    def generate_targets(self, masks, class_id):
-        num_classes = self.config.NUM_CLASSES
-        mask = masks[:, :, 0]
-        umask = masks[:, :, 1]
-        # what other bad cases? add them here
-        # currently crowd, small sized masks are flagged as bad instances
-        if class_id <= 0 or np.sum(mask) < 256:
-            return None, None, None, True
-        if np.sum(umask) / np.sum(mask) < 0.3:
-            umask = mask
-        # currently impulses are produced to fine tune for classification.
-        # in future impulse gen code needs to be written
-        impulse = umask
-        gt_response = mask
-        return impulse, gt_response, class_id, False
-
-    def resize_image(self, image, min_dim=None, max_dim=None, padding=False):
-        # Default window (y1, x1, y2, x2) and default scale == 1.
-        h, w = image.shape[:2]
-        window = (0, 0, h, w)
-        scale = 1
-
-        # Scale?
-        if min_dim:
-            # Scale up but not down
-            scale = max(1, min_dim / min(h, w))
-        # Does it exceed max dim?
-        if max_dim:
-            image_max = max(h, w)
-            if round(image_max * scale) > max_dim:
-                scale = max_dim / image_max
-        # Resize image and mask
-        if scale != 1:
-            image = scipy.misc.imresize(
-                image, (round(h * scale), round(w * scale)))
-        # Need padding?
-        if padding:
-            # Get new height and width
-            h, w = image.shape[:2]
-            top_pad = (max_dim - h) // 2
-            bottom_pad = max_dim - h - top_pad
-            left_pad = (max_dim - w) // 2
-            right_pad = max_dim - w - left_pad
-            padding = [(top_pad, bottom_pad), (left_pad, right_pad), (0, 0)]
-            image = np.pad(image, padding, mode='constant', constant_values=0)
-            window = (top_pad, left_pad, h + top_pad, w + left_pad)
-        return image, window, scale, padding
-
-    def resize_mask(self, mask, scale, padding):
-        h, w = mask.shape[:2]
-        mask = scipy.ndimage.zoom(mask, zoom=[scale, scale, 1], order=0)
-        mask = np.pad(mask, padding, mode='constant', constant_values=0)
-        return mask
-
-    def read_image(self, image_path):
-        # start = time.time() 
-        with open(image_path,"rb") as f:
-            image = Image.open(f)
-            # print(time.time()-start," per image")
-            return np.array(image.convert('RGB'))
-
-    def load_image_gt(self, instance_index):
-        config = self.config
-        dataset = self.dataset
-        instance_info = dataset.instance_info[instance_index]
-        image_path = instance_info["image_path"]
-        mask_obj = instance_info["mask_obj"]
-        class_id = instance_info["class_id"]
-
-        start = time.time()
-        image = self.read_image(image_path)
-        # print(time.time()-start,"read image only")
-        t = time.time()
-        masks = maskUtils.decode(mask_obj)
-        # print(t-start,"mask decode time")
-        # print(time.time()-start,"read_image + decode mask")
-        image, window, scale, padding = self.resize_image(
-            image,
-            min_dim=config.WIDTH,
-            max_dim=config.HEIGHT,
-            padding=config.IS_PADDED)
-        masks = self.resize_mask(masks, scale, padding)
-        if random.random() > 0.5:
-            image = np.fliplr(image)
-            masks = np.fliplr(masks)
-        return image, masks, class_id
-
-
-# write custom collate to delete bad instances?
-# not doing this because some times we might get all bad images
-# batch = list of (images,impulse,gt_response,class_id)
-def _collate_fn(batch):
-    # batch = filter(lambda x: x is not None, batch)
-    start = time.time()
-    x = torch.utils.data.dataloader.default_collate(batch)
-    end = time.time()
-    print(end-start," batch_collate")
-    return x
-# we take cid object from main (ugly interface)
-
-
-def get_loader(dataset_cid, config, data_order="ins"):
-    coco_dataset = None
-    if data_order == "cw_ins":
-        coco_dataset = CocoDataset_cw_ins(dataset_cid, config)
-    else:
-        coco_dataset = CocoDataset_ins(dataset_cid, config)
+def get_loader(dataset_cid, config):
+    coco_dataset = CocoDataset(dataset_cid, config)
     data_loader = torch.utils.data.DataLoader(dataset=coco_dataset,
                                               batch_size=config.BATCH_SIZE,
-                                              collate_fn=_collate_fn,
+                                              # collate_fn=_collate_fn,
                                               shuffle=True,
                                               num_workers=32)
     return data_loader
