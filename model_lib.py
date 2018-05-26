@@ -18,7 +18,9 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data
 from torch.autograd import Variable
-
+import modified_vgg
+import importlib
+importlib.reload(modified_vgg)
 
 class CocoDataset(torch.utils.data.Dataset):
 
@@ -33,14 +35,18 @@ class CocoDataset(torch.utils.data.Dataset):
     # shouldn't matter anyway because of blah blah
 
     def __getitem__(self, instance_index):
+        class_id = next(self.sampler)
         while True:
-            class_id = next(self.sampler)
-            # !! no guarantees that we iterate all elements !!
+            # !! no guarantees that we iterate all elements,
+            # TODO: modify this iterate one by one? or shift to weighted random sampler? !!
             cwid = (instance_index + 1) % self.cw_num_instances[class_id]
-            image, masks, class_id = self.load_image_gt(class_id, cwid)
-            impulse, gt_response, class_id, is_bad_image = self.generate_targets(masks, class_id)
+            # is_mask is_crowd reee
+            image, masks, is_crowd = self.load_image_gt(class_id, cwid)
+            impulse, gt_response, is_bad_image = self.generate_targets(masks, class_id, is_crowd)
+            print(is_crowd,is_bad_image,class_id)
             if not is_bad_image:
                 # channels first
+                print("asdfasdf")
                 image = image.astype(np.float32)
                 image -= self.config.MEAN_PIXEL
                 image = image / 128
@@ -52,6 +58,7 @@ class CocoDataset(torch.utils.data.Dataset):
                 return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
                     one_hot)
             else:
+                print("asdduejrieorieuorieuo")
                 instance_index += 1
 
     def __len__(self):
@@ -59,6 +66,8 @@ class CocoDataset(torch.utils.data.Dataset):
 
     def weighted_sampler(self):
         config = self.config
+        # TODO: define weighted sampler weights based on this
+        data_order = config.DATA_ORDER
         class_weighting = np.array(self.cw_num_instances)**0.5
         # adjust number of bg instances reweighting
         class_weighting[0] = np.median(class_weighting)
@@ -67,21 +76,22 @@ class CocoDataset(torch.utils.data.Dataset):
         while True:
             yield np.random.choice(self.class_ids, p=class_weighting)
 
-    def generate_targets(self, masks, class_id):
+    def generate_targets(self, masks, class_id, is_crowd):
         num_classes = self.config.NUM_CLASSES
         mask = masks[:, :, 0]
         umask = masks[:, :, 1]
         # what other bad cases? add them here
         # currently crowd, small sized masks are flagged as bad instances
-        if class_id <= 0 or np.sum(mask) < 256:
-            return None, None, None, True
+        print("sicourd:",is_crowd,"sied",np.sum(mask))
+        if class_id < 0 or np.sum(mask) < 256 or is_crowd:
+            return None, None, True
         if np.sum(umask) / np.sum(mask) < 0.3:
             umask = mask
         # currently impulses are produced to fine tune for classification.
         # in future impulse gen code needs to be written
         impulse = umask
         gt_response = mask
-        return impulse, gt_response, class_id, False
+        return impulse, gt_response, False
 
     def resize_image(self, image, min_dim=None, max_dim=None, padding=False):
         # Default window (y1, x1, y2, x2) and default scale == 1.
@@ -133,7 +143,7 @@ class CocoDataset(torch.utils.data.Dataset):
         instance_info = dataset.class_wise_instance_info[class_id][cwid]
         image_path = instance_info["image_path"]
         mask_obj = instance_info["mask_obj"]
-
+        is_mask = instance_info['is_mask']
         image = self.read_image(image_path)
         masks = maskUtils.decode(mask_obj)
 
@@ -146,7 +156,8 @@ class CocoDataset(torch.utils.data.Dataset):
         if random.random() > 0.5:
             image = np.fliplr(image)
             masks = np.fliplr(masks)
-        return image, masks, class_id
+        return image, masks, is_mask
+
 
 def get_loader(dataset_cid, config):
     coco_dataset = CocoDataset(dataset_cid, config)
@@ -154,49 +165,10 @@ def get_loader(dataset_cid, config):
                                               batch_size=config.BATCH_SIZE,
                                               # collate_fn=_collate_fn,
                                               shuffle=True,
-                                              num_workers=32)
+                                              # pin_memory=True,
+                                              num_workers=0)
     return data_loader
 
-# 1) convolve 2) batchnorm 3) add residual
-
-
-class BasicBlock(nn.Module):
-
-    def __init__(self, in_planes, mid_planes, out_planes, fr=(3, 3)):
-        # in_planes are mapped to out_planes by a bottleneck like connection,
-        # mid_planes only get 3,3 kernel size convs -> used to control no. of parms
-        # if more feature mixing is needed, use more of these
-        super(BasicBlock, self).__init__()
-        pad = ((fr[0] - 1) // 2, (fr[1] - 1) // 2)
-        self.conv1 = nn.Conv2d(in_planes, mid_planes, kernel_size=(1, 1))
-        self.bn1 = nn.BatchNorm2d(mid_planes)
-        self.conv2 = nn.Conv2d(mid_planes, mid_planes, kernel_size=fr, padding=pad)
-        self.bn2 = nn.BatchNorm2d(mid_planes)
-        self.conv3 = nn.Conv2d(mid_planes, out_planes, kernel_size=(1, 1))
-        self.bn3 = nn.BatchNorm2d(out_planes)
-        # highway is a direct linear transform on input to match output dimensions
-        self.highway = nn.Conv2d(in_planes, out_planes, kernel_size=(1, 1))
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        residual = self.highway(x)
-
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = self.relu(x)
-
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = self.relu(x)
-
-        x += residual
-        x = self.relu(x)
-
-        return x
 
 # proposes masks for single scale feature maps.
 # for multi_scale super vision, use this multiple times
@@ -221,128 +193,40 @@ class MaskProp(nn.Module):
 
 class Classifier(nn.Module):
 
-    def __init__(self, n_dims):
+    def __init__(self,init_weights = True):
         super(Classifier, self).__init__()
-        self.bb1 = BasicBlock(n_dims, 64, 64)
+        self.conv1 = nn.Conv2d(576, 256, (3, 3), padding = (1, 1))
         self.gap = nn.AvgPool2d((7, 7), stride=1)
-        self.fc = nn.Linear(64, 81)
+        self.fc = nn.Linear(256, 81)
+        self.relu = nn.ReLU(inplace=True)
+        if init_weights:
+            nn.init.xavier_uniform_(self.conv1.weight)
 
     def forward(self, x):
-        x = self.bb1(x)
-        # x = F.max_pool2d(x, (2, 2), 2)
+        x = self.conv1(x)
+        x = self.relu(x)
         x = self.gap(x)
-        x = x.view(-1, 64)
+        x = self.relu(x)
+        x = x.view(-1, 256)
         x = self.fc(x)
         return x
 
 
-# this is one down_sample and one up_sample
 class SimpleHGModel(nn.Module):
 
     def __init__(self):
         super(SimpleHGModel, self).__init__()
-        self.inp_conv_0 = nn.Conv2d(4, 16, (7, 7), padding=(3, 3))
-        # output dimensions
-        down_filter_sizes = [16, 32, 64, 64, 64, 64]
-        bottleneck_filter_sizes = [16, 32, 64, 64, 64, 64]
-        # wing_filter_sizes = [None,None,16,32,256,256]
-        up_filter_sizes = [64, 64, 64, 64]
-
-        self.down_conv_6 = BasicBlock(16, 64, down_filter_sizes[-6])
-
-        self.down_conv_5 = BasicBlock(down_filter_sizes[-6], 64, down_filter_sizes[-5])
-
-        self.down_conv_4 = BasicBlock(down_filter_sizes[-5], 64, down_filter_sizes[-4])
-
-        self.down_conv_3 = BasicBlock(down_filter_sizes[-4], 64, down_filter_sizes[-3])
-
-        self.down_conv_2 = BasicBlock(down_filter_sizes[-3], 64, down_filter_sizes[-2])
-
-        self.down_conv_1 = BasicBlock(down_filter_sizes[-2], 64, down_filter_sizes[-1])
-
-        # self.mid_conv_0 = BasicBlock(down_filter_sizes[-1], 64, up_filter_sizes[0])
-
-        # self.up_conv_1 = BasicBlock(up_filter_sizes[0], 64, up_filter_sizes[1])
-
-        # self.up_conv_2 = BasicBlock(up_filter_sizes[1], 64, up_filter_sizes[2])
-
-        # self.up_conv_3 = BasicBlock(up_filter_sizes[2], 64, up_filter_sizes[3])
-
-        # self.up_conv_4 = BasicBlock(up_filter_sizes[3], 64, up_filter_sizes[4])
-
-        # self.up_conv_5 = BasicBlock(up_filter_sizes[4], 64, up_filter_sizes[5])
-
-        # self.up_conv_6 = BasicBlock(up_filter_sizes[5], 64, up_filter_sizes[6])
-
-        self.wing_conv_1 = BasicBlock(down_filter_sizes[-1], 64, up_filter_sizes[0])
-
-        # self.wing_conv_2 = BasicBlock(down_filter_sizes[-2], 64, up_filter_sizes[1])
-
-        # self.wing_conv_3 = BasicBlock(down_filter_sizes[-3], 64, up_filter_sizes[2])
-
-        # self.wing_conv_4 = BasicBlock(down_filter_sizes[-4], 64, up_filter_sizes[3])
-
-        # self.wing_conv_5 = BasicBlock(down_filter_sizes[-5], 64, up_filter_sizes[4])
-
-        # self.wing_conv_6 = BasicBlock(down_filter_sizes[-6], 64, up_filter_sizes[5])
-
-        # self.mask_predictor = MaskProp(up_filter_sizes[3])
-        self.class_predictor = Classifier(up_filter_sizes[0])
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-        # elif isinstance(m, nn.BatchNorm2d):
-        #     nn.init.constant_(m.weight, 128)
-        #     nn.init.constant_(m.bias, 0)
+        self.vgg = modified_vgg.vgg11_features(vgg_weights=True)
+        self.class_predictor = Classifier()
+        # self.mask_predictor = MaskProp()
 
     def forward(self, x):
-        # HourGlass
-        image = x[0]
-        impulse = x[1]
-        inp = torch.cat([image, impulse], dim=1)
-        # 6,6,4 -> 6,6,8
-        inp = self.inp_conv_0(inp)
-        wing_convs = []
-        # 6,6,8->6,6,16->5,5,16
-        inp = self.down_conv_6(inp);  # wing_convs.append(self.wing_conv_6(inp));
-        inp = F.max_pool2d(inp, (2, 2), 2)
-        # 5,5,16->5,5,32->4,4,32
-        inp = self.down_conv_5(inp);  # wing_convs.append(self.wing_conv_5(inp));
-        inp = F.max_pool2d(inp, (2, 2), 2)
-        # 4,4,32->4,4,64->3,3,64
-        inp = self.down_conv_4(inp);  # wing_convs.append(self.wing_conv_4(inp));
-        inp = F.max_pool2d(inp, (2, 2), 2)
-        # 3,3,64->3,3,128->2,2,128
-        inp = self.down_conv_3(inp);  # wing_convs.append(self.wing_conv_3(inp));
-        inp = F.max_pool2d(inp, (2, 2), 2)
-        # 2,2,128->2,2,256->1,1,256
-        inp = self.down_conv_2(inp);  # wing_convs.append(self.wing_conv_2(inp));
-        inp = F.max_pool2d(inp, (2, 2), 2)
-        # 1,1,256->1,1,512->0,0,512
-        inp = self.down_conv_1(inp); wing_convs.append(self.wing_conv_1(inp));
-        # inp = F.max_pool2d(inp, (2, 2), 2)
-        # 0,0,512->0,0,512
-        # inp = self.mid_conv_0(inp);
-        # # up_convs = []
-        # # 1,1,256<-1,1,512<-0,0,512
-        # inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_1(inp + wing_convs[-1]); # up_convs.append(inp)
-        # # 2,2,128<-2,2,256<-1,1,256
-        # inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_2(inp + wing_convs[-2]); # up_convs.append(inp)
-        # # 3,3,64<-3,3,128<-2,2,128
-        # inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_3(inp + wing_convs[-3]); # up_convs.append(inp)
-        # 4,4,32<-4,4,64<-3,3,64
-        # inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_4(inp + wing_convs[-4]); # up_convs.append(inp)
-        # # 5,5,16<-5,5,32<-4,4,32
-        # inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_5(inp + wing_convs[-5]); # up_convs.append(inp)
-        # # 6,6,8<-6,6,16<-5,5,16
-        # inp = F.upsample(inp, scale_factor=2); inp = self.up_conv_6(inp + wing_convs[-6]); # up_convs.append(inp)
-
-        # Maskprediction, classification
-        return self.class_predictor(wing_convs[-1])  # F.upsample(self.mask_predictor(inp),scale_factor = 8)
+        x = torch.cat(x, dim=1)
+        c, m = self.vgg(x)
+        return self.class_predictor(c)  # ,self.mask_predictor(c,m)
 
 
-def loss_criterion(pred_mask, gt_mask, pred_class, gt_class,class_weighting):
+def loss_criterion(pred_mask, gt_mask, pred_class, gt_class, class_weighting):
     # if gt_class[0] == 1:
     #     return classification_loss(pred_class,gt_class)
     # else:
@@ -352,14 +236,16 @@ def loss_criterion(pred_mask, gt_mask, pred_class, gt_class,class_weighting):
 
 # pred_mask: N,1,w,h
 # gt_mask: N,1,w,h
+
+
 def mask_loss(pred_mask, gt_mask):
     # need to modify this
     # mask_shape = pred_mask.shape[2:]
     # F.max_pool2d()
-    fg_size = gt_mask.squeeze().sum(-1).sum(-1).view(-1,1,1,1)
-    bg_size = (1-gt_mask).squeeze().sum(-1).sum(-1).view(-1,1,1,1)
+    fg_size = gt_mask.squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)
+    bg_size = (1 - gt_mask).squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)
     # bgfg_weighting = (gt_mask== 1).float()/fg_size + (gt_mask == 0).float()/bg_size
-    bgfg_weighting = gt_mask + (gt_mask == 0).float()*fg_size/bg_size
+    bgfg_weighting = gt_mask + (gt_mask == 0).float() * fg_size / bg_size
     _loss = nn.BCEWithLogitsLoss(weight=bgfg_weighting)
     return _loss(pred_mask, gt_mask)
 
@@ -367,7 +253,7 @@ def mask_loss(pred_mask, gt_mask):
 def classification_loss(pred_class, gt_class, class_weighting):
     # _loss = nn.CrossEntropyLoss()
     _loss = nn.BCEWithLogitsLoss(weight=class_weighting)
-    return 81*_loss(pred_class, gt_class)
+    return _loss(pred_class, gt_class)
 
 
 # TODO: modify dummy stub to train code or inference code
