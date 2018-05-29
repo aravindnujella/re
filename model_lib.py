@@ -14,6 +14,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data
+import torchvision.transforms as transforms
 from torch.autograd import Variable
 import modified_vgg
 import importlib
@@ -42,15 +43,13 @@ class CocoDataset(torch.utils.data.Dataset):
             image, masks, is_crowd = self.load_image_gt(class_id, cwid)
             image, impulse, gt_response, one_hot, is_bad_image = self.generate_targets(image, masks, class_id, is_crowd)
             if not is_bad_image:
+                image = image/256
+                image -= self.config.MEAN_PIXEL
+                image /= self.config.STD_PIXEL 
                 # channels first
-                image = np.array(image)
-                impulse = np.array(impulse)
-                gt_response = np.array(gt_response)
-                # image -= self.config.MEAN_PIXEL
-                # image = image / 128
                 image = np.moveaxis(image, 2, 0)
-                impulse = np.moveaxis(np.expand_dims(impulse, -1), 2, 0).astype(np.float32)
-                gt_response = np.moveaxis(np.expand_dims(gt_response, -1), 2, 0).astype(np.float32)
+                impulse = np.moveaxis(np.expand_dims(impulse, -1), 2, 0)
+                gt_response = np.moveaxis(np.expand_dims(gt_response, -1), 2, 0)
                 return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
                     one_hot)
             else:
@@ -63,20 +62,29 @@ class CocoDataset(torch.utils.data.Dataset):
         n = len(self)
         for i in range(n):
             image, impulse, response, one_hot = [data.numpy() for data in self[i]]
-            Image.fromarray(image).show()
-            Image.fromarray(impulse).show()
-            Image.fromarray(response).show()
-            print(config.CLASS_NAMES[np.argmax(one_hot)])
+            image = np.moveaxis(image,0,-1)
+            image *= self.config.STD_PIXEL
+            image += self.config.MEAN_PIXEL
+            image *= 255
+            image[:,:,0][np.where(impulse.squeeze()==1)] = 255
+            impulse = np.squeeze(impulse)*255
+            response = np.squeeze(response)*255
+            Image.fromarray(image.astype(np.uint8),"RGB").show()
+            # Image.fromarray(impulse.astype(np.uint8),"L").show()
+            # Image.fromarray(response.astype(np.uint8),"L").show()
+            print(self.config.CLASS_NAMES[np.argmax(one_hot)])
             input()
 
     def weighted_sampler(self):
         config = self.config
         # TODO: define weighted sampler weights based on data_order
         data_order = config.DATA_ORDER
-        class_weighting = np.log2(np.array(self.cw_num_instances))
-        class_weighting = class_weighting**2
+        class_weighting = np.array(self.cw_num_instances)
+        # class_weighting = class_weighting**0.5
+        # class_weighting = np.log2(class_weighting)
         # adjust number of bg instances reweighting
         class_weighting[0] = np.median(class_weighting)
+        print(class_weighting)
         class_weighting = class_weighting / np.sum(class_weighting)
         np.random.seed()
         while True:
@@ -87,59 +95,66 @@ class CocoDataset(torch.utils.data.Dataset):
         # x1,y1,x2,y2
         return np.min(m[0]), np.min(m[1]), np.max(m[0]), np.max(m[1])
 
-    def random_crop(self, image, mask, b, bbox):
-        # prepare for crop = reshape to 640*640
-        image = self.resize_image(image, (640, 640), "RGB")
-        mask = self.resize_image(image, (640, 640), "L")
-        w, h = mask.size
-        x1, y1, x2, y2 = bbox
+    def random_crop(self, image_obj, mask_obj, b, bbox):
+        w, h = mask_obj.size
+        y1, x1, y2, x2 = bbox
         p = int(random.uniform(max(0, x2 - b), min(w - 1 - b, x1)))
         q = int(random.uniform(max(0, y2 - b), min(h - 1 - b, y1)))
-        return image.crop((p, p + b, q, q + b)), mask.crop((p, p + b, q, q + b))
+        return image_obj.crop((p, q, p + b, q + b)), mask_obj.crop((p, q, p + b, q + b))
 
     # unscaled image, masks
     def generate_targets(self, image, masks, class_id, is_crowd):
         config = self.config
         num_classes = self.config.NUM_CLASSES
+
         mask = masks[:, :, 0]
         umask = masks[:, :, 1]
+
         # very small objects. will be ignored now and retrained later
         # should probably keep crowds like oranges etc
-        if is_crowd or np.sum(mask) < 64:
+        if is_crowd or np.sum(mask) < 50:
             return None, None, None, None, True
-
+        
         if np.sum(umask) / np.sum(mask) < 0.3:
             umask = mask
-        # code to crop stuff x1,y1,x2,y2
-        bbox = self.extract_bbox(umask)
-        x1, y1, x2, y2 = bbox
+
+        image_obj = Image.fromarray(image, "RGB")
+        mask_obj = Image.fromarray(mask, "L")
+        umask_obj = Image.fromarray(umask, "L")
+
+        image_obj = self.resize_image(image_obj,(640,640),"RGB")
+        mask_obj = self.resize_image(mask_obj,(640,640),"L")
+        umask_obj = self.resize_image(umask_obj,(640,640),"L")
+
+        # code to crop stuff y1, x1, y2, x2
+        bbox = self.extract_bbox(np.array(umask_obj))
+        y1, x1, y2, x2 = bbox
         b = config.CROP_SIZE
+        
         # big object
-        mask = Image.fromarray(mask, "L")
-        umask = Image.fromarray(umask, "L")
         if (x2 - x1) > 100 or (y2 - y1) > 100:
-            image = self.resize_image(image, (b, b), "RGB")
-            umask = self.resize_image(umask, (b, b), "L")
+            image_obj = self.resize_image(image_obj, (b, b), "RGB")
+            umask_obj = self.resize_image(umask_obj, (b, b), "L")
         # small object
         else:
-            image, umask = self.random_crop(image, umask, b, bbox)
+            image_obj, umask_obj = self.random_crop(image_obj, umask_obj, b, bbox)
         # currently impulses are produced to fine tune for classification.
         # in future impulse gen code needs to be written
-        impulse = umask
-        gt_response = umask
+        impulse = umask_obj
+        gt_response = mask_obj
         one_hot = np.zeros(81)
         one_hot[class_id] = 1
-        return np.array(image), np.array(impulse), np.array(gt_response), np.array(one_hot), False
+        return np.array(image_obj).astype(np.float32), np.array(impulse).astype(np.float32), np.array(gt_response).astype(np.float32), np.array(one_hot).astype(np.float32), False
 
     def read_image(self, image_id):
         image = Image.open(self.data_dir + image_id).convert("RGB")
-        return image
+        return np.array(image)
 
-    def resize_image(self, image, max_dim, mode):
+    def resize_image(self, image_obj, max_dim, mode):
         z = Image.new(mode, max_dim, "black")
-        image.thumbnail(max_dim)
-        (w, h) = image.size
-        z.paste(image, ((max_dim[0] - w) // 2, (max_dim[1] - h) // 2))
+        image_obj.thumbnail(max_dim,Image.ANTIALIAS)
+        (w, h) = image_obj.size
+        z.paste(image_obj, ((max_dim[0] - w) // 2, (max_dim[1] - h) // 2))
         return z
 
     def load_image_gt(self, class_id, instance_index):
@@ -216,7 +231,7 @@ class SimpleHGModel(nn.Module):
 
     def __init__(self):
         super(SimpleHGModel, self).__init__()
-        self.vgg = modified_vgg.vgg11_features(vgg_weights=True)
+        self.vgg = modified_vgg.vgg11_features(pre_trained_weights=True)
         self.class_predictor = Classifier()
         # self.mask_predictor = MaskProp()
 
