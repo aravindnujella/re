@@ -80,11 +80,11 @@ class CocoDataset(torch.utils.data.Dataset):
         # TODO: define weighted sampler weights based on data_order
         data_order = config.DATA_ORDER
         class_weighting = np.array(self.cw_num_instances)
-        # class_weighting = class_weighting**0.5
         # class_weighting = np.log2(class_weighting)
         # adjust number of bg instances reweighting
         class_weighting[0] = np.median(class_weighting)
-        print(class_weighting)
+        class_weighting = class_weighting**0.5
+        # print(class_weighting)
         class_weighting = class_weighting / np.sum(class_weighting)
         np.random.seed()
         while True:
@@ -231,7 +231,7 @@ class SimpleHGModel(nn.Module):
 
     def __init__(self):
         super(SimpleHGModel, self).__init__()
-        self.vgg = modified_vgg.vgg11_features(pre_trained_weights=True)
+        self.vgg = modified_vgg.vgg11_features(pre_trained_weights=False)
         self.class_predictor = Classifier()
         # self.mask_predictor = MaskProp()
 
