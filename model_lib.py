@@ -41,8 +41,17 @@ class CocoDataset(torch.utils.data.Dataset):
             # TODO: modify this iterate one by one? or shift to weighted random sampler? !!
             cwid = (instance_index + 1) % self.cw_num_instances[class_id]
             image, masks, is_crowd = self.load_image_gt(class_id, cwid)
+            loaded_im,loaded_masks = image,masks
             image, impulse, gt_response, one_hot, is_bad_image = self.generate_targets(image, masks, class_id, is_crowd)
             if not is_bad_image:
+                if(np.sum(gt_response) == 0):
+                    Image.fromarray(loaded_im.astype(np.uint8),"RGB").show()
+                    Image.fromarray((loaded_masks[:,:,0]*255).astype(np.uint8),"L").show()
+                    Image.fromarray((loaded_masks[:,:,1]*255).astype(np.uint8),"L").show()
+                    Image.fromarray(image.astype(np.uint8),"RGB").show()
+                    Image.fromarray((impulse*255).astype(np.uint8),"L").show()
+                    Image.fromarray((gt_response*255).astype(np.uint8),"L").show()
+                    print(self.config.CLASS_NAMES[class_id])
                 image = image / 256
                 image -= self.config.MEAN_PIXEL
                 image /= self.config.STD_PIXEL
@@ -67,6 +76,8 @@ class CocoDataset(torch.utils.data.Dataset):
             image += self.config.MEAN_PIXEL
             image *= 255
             image[:, :, 0][np.where(impulse.squeeze() == 1)] = 255
+            image[:, :, 1][np.where(impulse.squeeze() == 1)] = 255
+            image[:, :, 2][np.where(impulse.squeeze() == 1)] = 255
             impulse = np.squeeze(impulse) * 255
             response = np.squeeze(response) * 255
             Image.fromarray(image.astype(np.uint8), "RGB").show()
@@ -81,8 +92,6 @@ class CocoDataset(torch.utils.data.Dataset):
         data_order = config.DATA_ORDER
         class_weighting = np.array(self.cw_num_instances)
         # class_weighting = np.log2(class_weighting)
-        # adjust number of bg instances reweighting.
-        # class_weighting[0] = np.median(class_weighting)
         class_weighting = class_weighting**0.5
         # print(class_weighting)
         class_weighting = class_weighting / np.sum(class_weighting)
@@ -101,14 +110,6 @@ class CocoDataset(torch.utils.data.Dataset):
         p = int(random.uniform(max(0, x2 - b), min(w - b, x1)))
         q = int(random.uniform(max(0, y2 - b), min(h - b, y1)))
         s = np.sum(np.array(mask_obj))
-        xx = mask_obj.crop((p, q, p + b, q + b))
-        if np.sum(np.array(xx)) != s:
-            print(s,np.sum(np.array(xx)))
-            print("reeeeeeeee")
-            image_obj.show()
-            mask_obj.point(lambda blah: blah*255).show()
-            xx.point(lambda blah: blah*255).show()
-            input()
         return image_obj.crop((p, q, p + b, q + b)), mask_obj.crop((p, q, p + b, q + b))
 
     # unscaled image, masks
@@ -131,9 +132,9 @@ class CocoDataset(torch.utils.data.Dataset):
         mask_obj = Image.fromarray(mask, "L")
         umask_obj = Image.fromarray(umask, "L")
 
-        image_obj = self.resize_image(image_obj, (640, 640), "RGB")
-        mask_obj = self.resize_image(mask_obj, (640, 640), "L")
-        umask_obj = self.resize_image(umask_obj, (640, 640), "L")
+        image_obj = self.resize_image(image_obj, (672, 672), "RGB")
+        mask_obj = self.resize_image(mask_obj, (672, 672), "L")
+        umask_obj = self.resize_image(umask_obj, (672, 672), "L")
 
         # code to crop stuff y1, x1, y2, x2
         bbox = self.extract_bbox(np.array(umask_obj))
@@ -141,7 +142,7 @@ class CocoDataset(torch.utils.data.Dataset):
         b = config.CROP_SIZE
 
         # big object
-        if (x2 - x1) > 100 or (y2 - y1) > 100:
+        if (x2 - x1) > 180 or (y2 - y1) > 180:
             image_obj = self.resize_image(image_obj, (b, b), "RGB")
             umask_obj = self.resize_image(umask_obj, (b, b), "L")
         # small object
@@ -151,12 +152,6 @@ class CocoDataset(torch.utils.data.Dataset):
         # in future impulse gen code needs to be written
         impulse = umask_obj
         gt_response = umask_obj
-        # if np.sum(np.array(gt_response)) == 0:
-        #     image_obj.show()
-        #     mask_obj.point(lambda z: z*255).show()
-        #     umask_obj.point(lambda z: z*255).show()
-        #     print(self.config.CLASS_NAMES[class_id])
-        #     input()
         one_hot = np.zeros(81)
         one_hot[class_id] = 1
         return np.array(image_obj).astype(np.float32), np.array(impulse).astype(np.float32), np.array(gt_response).astype(np.float32), np.array(one_hot).astype(np.float32), False
@@ -165,11 +160,14 @@ class CocoDataset(torch.utils.data.Dataset):
         image = Image.open(self.data_dir + image_id).convert("RGB")
         return np.array(image)
 
-    def resize_image(self, image_obj, max_dim, mode):
-        z = Image.new(mode, max_dim, "black")
-        image_obj.thumbnail(max_dim, Image.ANTIALIAS)
+    def resize_image(self, image_obj, thumbnail_shape, mode):
+        z = Image.new(mode, thumbnail_shape, "black")
+        if mode == 'RGB':
+            image_obj.thumbnail(thumbnail_shape, Image.ANTIALIAS)
+        else:
+            image_obj.thumbnail(thumbnail_shape, Image.NEAREST)
         (w, h) = image_obj.size
-        z.paste(image_obj, ((max_dim[0] - w) // 2, (max_dim[1] - h) // 2))
+        z.paste(image_obj, ((thumbnail_shape[0] - w) // 2, (thumbnail_shape[1] - h) // 2))
         return z
 
     def load_image_gt(self, class_id, instance_index):
@@ -280,11 +278,11 @@ class SimpleHGModel(nn.Module):
 
 
 def loss_criterion(pred_class, gt_class, pred_mask, gt_mask):
-    print(gt_mask.squeeze().sum(-1).sum(-1))
-    print(gt_mask.shape)
-    print(pred_mask.shape)
+    # print(gt_mask.squeeze().sum(-1).sum(-1))
+    # print(gt_mask.shape)
+    # print(pred_mask.shape)
     gt_mask = F.upsample(gt_mask,size = pred_mask.shape[2:],mode="bilinear",align_corners=False)
-    print(gt_mask.squeeze().sum(-1).sum(-1))
+    # print(gt_mask.squeeze().sum(-1).sum(-1))
     idx = gt_class[..., 0].nonzero()
     # mask_weights = torch.ones(gt_class.shape[0]).cuda()
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
@@ -318,7 +316,7 @@ def mask_loss(pred_mask, gt_mask, mask_weights):
 def classification_loss(pred_class, gt_class):
     _loss = nn.BCEWithLogitsLoss(reduce = False)
     l = _loss(pred_class, gt_class)
-    l = l.sum(-1).mean()
+    l = l.sum(-1).mean()/81
     return l
 
 # TODO: modify dummy stub to train code or inference code
