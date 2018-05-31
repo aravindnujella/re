@@ -44,14 +44,6 @@ class CocoDataset(torch.utils.data.Dataset):
             loaded_im,loaded_masks = image,masks
             image, impulse, gt_response, one_hot, is_bad_image = self.generate_targets(image, masks, class_id, is_crowd)
             if not is_bad_image:
-                if(np.sum(gt_response) == 0):
-                    Image.fromarray(loaded_im.astype(np.uint8),"RGB").show()
-                    Image.fromarray((loaded_masks[:,:,0]*255).astype(np.uint8),"L").show()
-                    Image.fromarray((loaded_masks[:,:,1]*255).astype(np.uint8),"L").show()
-                    Image.fromarray(image.astype(np.uint8),"RGB").show()
-                    Image.fromarray((impulse*255).astype(np.uint8),"L").show()
-                    Image.fromarray((gt_response*255).astype(np.uint8),"L").show()
-                    print(self.config.CLASS_NAMES[class_id])
                 image = image / 256
                 image -= self.config.MEAN_PIXEL
                 image /= self.config.STD_PIXEL
@@ -93,7 +85,6 @@ class CocoDataset(torch.utils.data.Dataset):
         class_weighting = np.array(self.cw_num_instances)
         # class_weighting = np.log2(class_weighting)
         class_weighting = class_weighting**0.5
-        # print(class_weighting)
         class_weighting = class_weighting / np.sum(class_weighting)
         np.random.seed()
         while True:
@@ -278,13 +269,8 @@ class SimpleHGModel(nn.Module):
 
 
 def loss_criterion(pred_class, gt_class, pred_mask, gt_mask):
-    # print(gt_mask.squeeze().sum(-1).sum(-1))
-    # print(gt_mask.shape)
-    # print(pred_mask.shape)
-    gt_mask = F.upsample(gt_mask,size = pred_mask.shape[2:],mode="bilinear",align_corners=False)
-    # print(gt_mask.squeeze().sum(-1).sum(-1))
+    gt_mask = F.upsample(gt_mask,size = pred_mask.shape[2:],mode="nearest",align_corners=False)
     idx = gt_class[..., 0].nonzero()
-    # mask_weights = torch.ones(gt_class.shape[0]).cuda()
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
     loss1 = classification_loss(pred_class, gt_class)
@@ -296,12 +282,8 @@ def loss_criterion(pred_class, gt_class, pred_mask, gt_mask):
 
 
 def mask_loss(pred_mask, gt_mask, mask_weights):
-    # need to modify this
-    # mask_shape = pred_mask.shape[2:]
-    # F.max_pool2d()
     fg_size = gt_mask.squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)
     bg_size = (1 - gt_mask).squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)
-    # print(fg_size.squeeze())
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     # bgfg_weighting = (gt_mask == 1).float() / fg_size + (gt_mask == 0).float() / bg_size
     bgfg_weighting = (gt_mask == 1).float() / fg_size + (gt_mask == 0).float() / bg_size
