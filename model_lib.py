@@ -211,7 +211,7 @@ class MaskProp(nn.Module):
             nn.Upsample(scale_factor=2),
         )   
         self.layer_ = nn.Sequential(
-            nn.Conv2d(36, 1, (1, 1)), nn.BatchNorm2d(1), self.relu,
+            nn.Conv2d(36, 1, (3, 3),padding=(1,1)), nn.BatchNorm2d(1), self.relu,
         )
         if init_weights:
             for name,child in self.named_children():
@@ -269,7 +269,7 @@ class SimpleHGModel(nn.Module):
 
 
 def loss_criterion(pred_class, gt_class, pred_mask, gt_mask):
-    gt_mask = F.upsample(gt_mask,size = pred_mask.shape[2:],mode="nearest",align_corners=False)
+    gt_mask = F.upsample(gt_mask,size = pred_mask.shape[2:],mode="bilinear",align_corners=False)
     idx = gt_class[..., 0].nonzero()
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
