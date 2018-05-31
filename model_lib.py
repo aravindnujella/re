@@ -290,7 +290,7 @@ def mask_loss(pred_mask, gt_mask, mask_weights):
     bgfg_weighting *= mask_weights
     _loss = nn.BCEWithLogitsLoss(weight=bgfg_weighting,reduce = False)
     l = _loss(pred_mask, gt_mask)
-    l = l.squeeze().sum(-1).sum(-1)
+    # l = l.squeeze().sum(-1).sum(-1)
     l = l.mean()
     return l
 
@@ -298,7 +298,8 @@ def mask_loss(pred_mask, gt_mask, mask_weights):
 def classification_loss(pred_class, gt_class):
     _loss = nn.BCEWithLogitsLoss(reduce = False)
     l = _loss(pred_class, gt_class)
-    l = l.sum(-1).mean()/81
+    # l = l.sum(-1)
+    l = l.mean()
     return l
 
 # TODO: modify dummy stub to train code or inference code
