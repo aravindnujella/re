@@ -20,7 +20,7 @@ class vgg11_features(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=(2, 2), stride=2)
         # cfg = [4,72,144,288,288,576,576,576,576]
         self.layer1 = nn.Sequential(
-            nn.Conv2d(4, 72, (3, 3), padding=(1, 1)), nn.BatchNorm2d(72), self.relu,
+            nn.Conv2d(5, 72, (3, 3), padding=(1, 1)), nn.BatchNorm2d(72), self.relu,
         )
         self.layer2 = nn.Sequential(
             nn.Conv2d(72, 144, (3, 3), padding=(1, 1)), nn.BatchNorm2d(144), self.relu,
@@ -64,7 +64,7 @@ class vgg11_features(nn.Module):
                 _shapes[l].append(child.weight.shape)
             elif isinstance(child, nn.MaxPool2d):
                 l += 1
-        d_in = 1
+        d_in = 2
         new_filters = [[] for l in range(5)]
         i = 0; l = 0
         for child in vgg.features.children():
@@ -109,7 +109,7 @@ class vgg11_features(nn.Module):
 if __name__ == '__main__':
     import numpy as np
     net = vgg11_features(pre_trained_weights=True)
-    torch.save(net.state_dict(), "./models/vgg11_features.pt")
+    torch.save(net.state_dict(), "./models/vgg11_features_2.pt")
     # net.load_state_dict(torch.load("./models/vgg11_features.pt"))
     # net_parameters = filter(lambda p: p.requires_grad, net.parameters())
     # params = sum([np.prod(p.size()) for p in net_parameters])
