@@ -343,7 +343,8 @@ def mask_loss(pred_masks, gt_mask, mask_weights):
     mask_weights = mask_weights.view(-1, 1, 1, 1).repeat(1, 4, 1, 1)
     gt_masks = gt_mask.repeat(1, 4, 1, 1)
     # bgfg_weighting = (gt_mask == 1).float() / fg_size + (gt_mask == 0).float() / bg_size
-    bgfg_weighting = (gt_masks == 1).float() / fg_size + (gt_masks == 0).float() / bg_size
+    bgfg_weighting = (gt_masks == 1).float() *224 / fg_size + (gt_masks == 0).float()*224 / bg_size
+    # bgfg_weighting = (gt_masks == 1).float() + (gt_masks == 0).float()
     bgfg_weighting *= mask_weights
     _loss = nn.BCEWithLogitsLoss(weight=bgfg_weighting, reduce=False)
     l = _loss(pred_masks, gt_masks)
