@@ -165,6 +165,8 @@ class CocoDataset(torch.utils.data.Dataset):
         else:
             image_obj, umask_obj, mask_obj = self.random_crop(image_obj, umask_obj, mask_obj, b, bbox)
 
+        if np.sum(np.array(umask_obj)) <20:
+            return None, None, None, None, True
         impulse = self.random_impulse(umask_obj)
         gt_response = mask_obj
         one_hot = np.zeros(81)
