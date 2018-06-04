@@ -265,7 +265,6 @@ class MaskProp(nn.Module):
         y = F.max_pool3d(y,(64,1,1))
         # print(y.shape)
         return y.squeeze().unsqueeze(1)
-
 # classifier takes a single level features and classifies
 
 
@@ -288,7 +287,6 @@ class Classifier(nn.Module):
         x = x.view(-1, 256)
         x = self.fc(x)
         return x
-
 # def expand_impulse(base_impulse):
 #     idx = base_impulse.nonzero()
 #     i1,j1,i2,j2 = idx[:,0].min(),idx[:,1].min(),idx[:,0].max(),idx[:,1].max()
@@ -298,7 +296,7 @@ class SimpleHGModel(nn.Module):
 
     def __init__(self):
         super(SimpleHGModel, self).__init__()
-        self.vgg0 = modified_vgg.vgg16_features(pre_trained_weights=False)
+        self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False)
         # self.vgg = modified_vgg.vgg11_features(pre_trained_weights=False)
         self.mp0 = MaskProp()
         # self.mp1 = MaskProp()
@@ -337,7 +335,6 @@ class SimpleHGModel(nn.Module):
 
         c = self.class_predictor(class_features)
         return c, torch.cat(outs, dim=1)
-
 
 def loss_criterion(pred_class, gt_class, pred_masks, gt_mask):
     idx = gt_class[..., 0].nonzero()
