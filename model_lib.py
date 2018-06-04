@@ -232,20 +232,20 @@ class MaskProp(nn.Module):
         super(MaskProp, self).__init__()
         self.relu = nn.ReLU(inplace=True)
         self.layer5 = nn.Sequential(
-            nn.Conv2d(576 + 64, 288, (3, 3), padding=(1, 1)), nn.BatchNorm2d(288), self.relu,
+            nn.Conv2d(640 + 128, 512, (3, 3), padding=(1, 1)), nn.BatchNorm2d(512), self.relu,
             nn.Upsample(scale_factor=2),
         )
         self.layer4 = nn.Sequential(
-            nn.Conv2d(288 + 64, 144, (3, 3), padding=(1, 1)), nn.BatchNorm2d(144), self.relu,
+            nn.Conv2d(512 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
             nn.Upsample(scale_factor=2),
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(144 + 32, 36, (3, 3), padding=(1, 1)), nn.BatchNorm2d(36), self.relu,
+            nn.Conv2d(256 + 64, 64, (3, 3), padding=(1, 1)), nn.BatchNorm2d(64), self.relu,
             # nn.Upsample(scale_factor=2),
         )
-        self.layer_ = nn.Sequential(
-            nn.Conv2d(36, 1, (3, 3), padding=(1, 1)), nn.BatchNorm2d(1), self.relu,
-        )
+        # self.layer_ = nn.Sequential(
+        #     nn.Conv2d(64, 1, (3, 3), padding=(1, 1)), nn.BatchNorm2d(1), self.relu,
+        # )
         if init_weights:
             for name, child in self.named_children():
                 if name[:-1] == 'layer':
@@ -260,8 +260,11 @@ class MaskProp(nn.Module):
         y = self.layer5(torch.cat([c, l5], 1))
         y = self.layer4(torch.cat([y, l4], 1))
         y = self.layer3(torch.cat([y, l3], 1))
-        y = self.layer_(y)
-        return y
+        # y = self.layer_(y)
+        y = y.unsqueeze(1)
+        y = F.max_pool3d(y,(64,1,1))
+        # print(y.shape)
+        return y.squeeze().unsqueeze(1)
 
 # classifier takes a single level features and classifies
 
@@ -270,7 +273,7 @@ class Classifier(nn.Module):
 
     def __init__(self, init_weights=True):
         super(Classifier, self).__init__()
-        self.conv1 = nn.Conv2d(576, 256, (3, 3), padding=(1, 1))
+        self.conv1 = nn.Conv2d(640, 256, (3, 3), padding=(1, 1))
         self.gap = nn.AvgPool2d((7, 7), stride=1)
         self.fc = nn.Linear(256, 81)
         self.relu = nn.ReLU(inplace=True)
@@ -295,7 +298,7 @@ class SimpleHGModel(nn.Module):
 
     def __init__(self):
         super(SimpleHGModel, self).__init__()
-        self.vgg0 = modified_vgg.vgg11_features(pre_trained_weights=False)
+        self.vgg0 = modified_vgg.vgg16_features(pre_trained_weights=False)
         # self.vgg = modified_vgg.vgg11_features(pre_trained_weights=False)
         self.mp0 = MaskProp()
         # self.mp1 = MaskProp()

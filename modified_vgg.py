@@ -111,32 +111,37 @@ class vgg11_features(nn.Module):
 class vgg16_features(nn.Module):
 
     def __init__(self, pre_trained_weights=True):
-        super(vgg11_features, self).__init__()
+        super(vgg16_features, self).__init__()
         self.relu = nn.ReLU(inplace=True)
         self.pool = nn.MaxPool2d(kernel_size=(2, 2), stride=2)
-        # cfg = [4,72,144,288,288,576,576,576,576]
+        # cfg = [3+10,80,80,160,160,320,320,320,640,640,640,640,640,640]
         self.layer1 = nn.Sequential(
-            nn.Conv2d(3+4, 72, (3, 3), padding=(1, 1)), nn.BatchNorm2d(72), self.relu,
+            nn.Conv2d(3+10, 80, (3, 3), padding=(1, 1)), nn.BatchNorm2d(80), self.relu,
+            nn.Conv2d(80, 80, (3, 3), padding=(1, 1)), nn.BatchNorm2d(80), self.relu,
         )
         self.layer2 = nn.Sequential(
-            nn.Conv2d(72, 144, (3, 3), padding=(1, 1)), nn.BatchNorm2d(144), self.relu,
+            nn.Conv2d(80, 160, (3, 3), padding=(1, 1)), nn.BatchNorm2d(160), self.relu,
+            nn.Conv2d(160, 160, (3, 3), padding=(1, 1)), nn.BatchNorm2d(160), self.relu,
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(144, 288, (3, 3), padding=(1, 1)), nn.BatchNorm2d(288), self.relu,
-            nn.Conv2d(288, 288, (3, 3), padding=(1, 1)), nn.BatchNorm2d(288), self.relu,
+            nn.Conv2d(160, 320, (3, 3), padding=(1, 1)), nn.BatchNorm2d(320), self.relu,
+            nn.Conv2d(320, 320, (3, 3), padding=(1, 1)), nn.BatchNorm2d(320), self.relu,
+            nn.Conv2d(320, 320, (3, 3), padding=(1, 1)), nn.BatchNorm2d(320), self.relu,
         )
         self.layer4 = nn.Sequential(
-            nn.Conv2d(288, 576, (3, 3), padding=(1, 1)), nn.BatchNorm2d(576), self.relu,
-            nn.Conv2d(576, 576, (3, 3), padding=(1, 1)), nn.BatchNorm2d(576), self.relu,
+            nn.Conv2d(320, 640, (3, 3), padding=(1, 1)), nn.BatchNorm2d(640), self.relu,
+            nn.Conv2d(640, 640, (3, 3), padding=(1, 1)), nn.BatchNorm2d(640), self.relu,
+            nn.Conv2d(640, 640, (3, 3), padding=(1, 1)), nn.BatchNorm2d(640), self.relu,
         )
         self.layer5 = nn.Sequential(
-            nn.Conv2d(576, 576, (3, 3), padding=(1, 1)), nn.BatchNorm2d(576), self.relu,
-            nn.Conv2d(576, 576, (3, 3), padding=(1, 1)), nn.BatchNorm2d(576), self.relu,
+            nn.Conv2d(640, 640, (3, 3), padding=(1, 1)), nn.BatchNorm2d(640), self.relu,
+            nn.Conv2d(640, 640, (3, 3), padding=(1, 1)), nn.BatchNorm2d(640), self.relu,
+            nn.Conv2d(640, 640, (3, 3), padding=(1, 1)), nn.BatchNorm2d(640), self.relu,
         )
 
-        self.wing_conv5 = nn.Conv2d(576, 64, (3, 3), padding=(1, 1))
-        self.wing_conv4 = nn.Conv2d(576, 64, (3, 3), padding=(1, 1))
-        self.wing_conv3 = nn.Conv2d(288, 32, (3, 3), padding=(1, 1))
+        self.wing_conv5 = nn.Conv2d(640, 128, (3, 3), padding=(1, 1))
+        self.wing_conv4 = nn.Conv2d(640, 128, (3, 3), padding=(1, 1))
+        self.wing_conv3 = nn.Conv2d(320, 64, (3, 3), padding=(1, 1))
 
         # initialize with vgg weights
         if pre_trained_weights == True:
@@ -154,13 +159,13 @@ class vgg16_features(nn.Module):
     def init_weights(self):
         _shapes = [[] for i in range(5)]
         l = 0
-        vgg = models.vgg11(pretrained=True)
+        vgg = models.vgg16(pretrained=True)
         for child in vgg.features.children():
             if isinstance(child, nn.Conv2d):
                 _shapes[l].append(child.weight.shape)
             elif isinstance(child, nn.MaxPool2d):
                 l += 1
-        d_in = 4
+        d_in = 10
         new_filters = [[] for l in range(5)]
         i = 0; l = 0
         for child in vgg.features.children():
@@ -168,17 +173,20 @@ class vgg16_features(nn.Module):
                 cur_in = _shapes[l][i][1]
                 cur_out = _shapes[l][i][0]
                 kernel_shape = _shapes[l][i][2:]
-                d_out = cur_out // 8
+                d_out = cur_out // 4
                 fan_in = kernel_shape[0] * kernel_shape[1]
                 # ignore_filters: cur_out, cur_in + d_in, kernel_shape
                 c = torch.zeros((cur_out, d_in) + kernel_shape)
                 ignore_filters = torch.cat([child.weight, c], 1)
                 a = torch.zeros((d_out, cur_in,) + kernel_shape)
+                # nn.init.xavier_uniform_(a)
                 idx = np.array([i % d_in for i in range(d_out)])
                 b = np.zeros((d_out, d_in))
                 b[range(d_out), idx] = 1
                 b = torch.from_numpy(b).unsqueeze(-1).unsqueeze(-1).float()
-                b = b.repeat([1, 1, kernel_shape[0], kernel_shape[1]]) / fan_in
+                b = b.repeat([1, 1, kernel_shape[0], kernel_shape[1]])
+                w = torch.randint_like(b,1,d_in+d_out)
+                b = b/(w**0.5)
                 # print(type(a),type(b))
                 copy_filters = torch.cat([a, b], 1)
                 new_conv = torch.cat([ignore_filters, copy_filters], 0)
@@ -196,6 +204,7 @@ class vgg16_features(nn.Module):
                     if isinstance(gc, nn.Conv2d):
                         gc.weight = nn.Parameter(new_filters[l][k])
                         k += 1
+                        print(gc.weight.shape)
                     elif isinstance(gc, nn.BatchNorm2d):
                         nn.init.constant_(gc.weight, 1)
                         nn.init.constant_(gc.bias, 0)
@@ -206,8 +215,8 @@ class vgg16_features(nn.Module):
 
 if __name__ == '__main__':
     import numpy as np
-    net = vgg11_features(pre_trained_weights=True)
-    torch.save(net.state_dict(), "./models/vgg11_features_7.pt")
+    net = vgg16_features(pre_trained_weights=True)
+    torch.save(net.state_dict(), "./models/vgg16_features_10.pt")
     # net.load_state_dict(torch.load("./models/vgg11_features.pt"))
     # net_parameters = filter(lambda p: p.requires_grad, net.parameters())
     # params = sum([np.prod(p.size()) for p in net_parameters])
