@@ -117,16 +117,19 @@ class CocoDataset(torch.utils.data.Dataset):
             idx = np.where(small_umask)
             locx, locy = random.choice(list(zip(idx[0], idx[1])))
             locx, locy = locx * 8, locy * 8
+            # y1, x1, y2, x2 = self.extract_bbox(umask)
+            # locx = (y1 + y2) // 2
+            # locy = (x1 + x2) // 2
         # dimensions of impulse
-        l = 16
+        l = 8
         n = 4
         impulse = np.zeros((3 * n - 2,) + umask.shape)
         impulse[0][max(locx - l // 2, 0):min(locx + l // 2, w), max(locy - l // 2, 0):min(locy + l // 2, h)] = 1
         for i in range(n - 1):
-            L = (2**i) * l
-            impulse[3 * i + 1][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
-            impulse[3 * i + 2][max(locx - L // 2, 0):min(locx + L // 2, w), max(locy - L, 0):min(locy + L, h)] = 1
-            impulse[3 * i + 3][max(locx - L, 0):min(locx + L, w), max(locy - L // 2, 0):min(locy + L // 2, h)] = 1
+            L = (3**i) * l
+            impulse[3 * i + 1][max(locx - L // 2, 0):min(locx + L // 2, w), max(locy - L, 0):min(locy + L, h)] = 1
+            impulse[3 * i + 2][max(locx - L, 0):min(locx + L, w), max(locy - L // 2, 0):min(locy + L // 2, h)] = 1
+            impulse[3 * i + 3][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
         return impulse
     # unscaled image, masks
 
@@ -173,6 +176,7 @@ class CocoDataset(torch.utils.data.Dataset):
         if np.sum(np.array(umask_obj)) < 20:
             return None, None, None, None, True
         impulse = self.random_impulse(umask_obj)
+        impulse[-1] = np.array(mask_obj)
         gt_response = mask_obj
         one_hot = np.zeros(81)
         one_hot[class_id] = 1
@@ -312,7 +316,7 @@ class SimpleHGModel(nn.Module):
         self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False)
         # self.vgg = modified_vgg.vgg11_features(pre_trained_weights=False)
         self.mp0 = MaskProp()
-        # self.mp1 = MaskProp()
+        self.mp1 = MaskProp()
         # self.mp2 = MaskProp()
         # self.mp3 = MaskProp()
         self.class_predictor = Classifier()
@@ -324,61 +328,68 @@ class SimpleHGModel(nn.Module):
         inp = torch.cat([im, base_impulse], dim=1)
         class_features, mask_features = self.vgg0(inp)
         m0 = self.mp0([class_features, mask_features])
-        # outs.append(m0)
-        # gen_impulse = F.upsample(m0, scale_factor=4)
+        outs.append(m0)
+        gen_impulse = F.threshold(F.sigmoid(F.upsample(m0[-1], scale_factor=4)),0.5,0)
 
-        # inp = torch.cat([im, base_impulse,gen_impulse], dim=1)
-        # class_features, mask_features = self.vgg(inp)
-        # m1 = self.mp1([class_features, mask_features])
-        # outs.append(m1)
-        # gen_impulse = F.upsample(m1, scale_factor=4)
+        base_impulse = base_impulse[:,:-1,...]
+        print(base_impulse.shape)
+        inp = torch.cat([im, base_impulse,gen_impulse], dim=1)
+        class_features, mask_features = self.vgg0(inp)
+        m1 = self.mp0([class_features, mask_features])
+        outs.append(m1)
+        gen_impulse = F.upsample(m1[-1], scale_factor=4)
 
         # inp = torch.cat([im, base_impulse,gen_impulse], dim=1)
         # class_features, mask_features = self.vgg(inp)
         # m2 = self.mp2([class_features, mask_features])
         # outs.append(m2)
-        # gen_impulse = F.upsample(m2, scale_factor=4)
+        # gen_impulse = F.upsample(m2[-1], scale_factor=4)
 
         # inp = torch.cat([im, base_impulse,gen_impulse], dim=1)
         # class_features, mask_features = self.vgg(inp)
         # m3 = self.mp3([class_features, mask_features])
         # outs.append(m3)
-        # gen_impulse = F.upsample(m3, scale_factor=4)
+        # gen_impulse = F.upsample(m3[-1], scale_factor=4)
 
         c = self.class_predictor(class_features)
-        # return c, torch.cat(outs, dim=1)
-        return c,m0
+        return c, outs
+        # return c,m0
 
 def loss_criterion(pred_class, gt_class, pred_masks, gt_mask):
     idx = gt_class[..., 0].nonzero()
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
     loss1 = classification_loss(pred_class, gt_class)
-    loss2 = multi_scale_mask_loss(pred_masks, gt_mask, mask_weights)
+    loss2 = 0
+    for i in range(2):
+        loss2 += multi_scale_mask_loss(pred_masks[i], gt_mask, mask_weights)
     return loss1, loss2
 
-# pred_masks: N,4,w,h
-# gt_mask: N,1,w,h
 
 def multi_scale_mask_loss(pred_masks,gt_mask,mask_weights):
     pred_masks = reversed(pred_masks)
     loss = 0
     for i in range(3):
-        scale = 2**i
-        target = F.max_pool2d(gt_mask,(4*scale,4*scale),stride = 4*scale)
-        loss += mask_loss(target,next(pred_masks),mask_weights)*(scale**2)
+        scale_down = 2**(i+2)
+        pred = next(pred_masks)
+        loss += mask_loss(pred,gt_mask,mask_weights,scale_down)*scale_down/4
+        # print(loss)
     return loss 
-def mask_loss(pred_masks, gt_mask, mask_weights):
-    fg_size = gt_mask.squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)
-    bg_size = (1 - gt_mask).squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)
+# gt_mask: N,1,w,h
+# pred_masks: N,1,w/scale_down,h/scale_down
+def mask_loss(pred_masks, gt_mask, mask_weights,scale_down):
+    target = F.max_pool2d(gt_mask,(scale_down,scale_down),stride = scale_down)
+    fg_size = gt_mask.squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)/(scale_down**2)
+    bg_size = (1 - gt_mask).squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)/(scale_down**2)
+    if (fg_size > 0).sum() != gt_mask.shape[0] or (bg_size > 0).sum() != gt_mask.shape[0]:
+        print((fg_size>0).sum(),"sdfsdfg\n",(bg_size>0).sum())
     mask_weights = mask_weights.view(-1, 1, 1, 1)
-    gt_masks = gt_mask
-    # bgfg_weighting = (gt_mask == 1).float() / fg_size + (gt_mask == 0).float() / bg_size
-    bgfg_weighting = ((gt_masks == 1).float() / fg_size + (gt_masks == 0).float() / bg_size) * (fg_size + bg_size)
-    # bgfg_weighting = (gt_masks == 1).float() + (gt_masks == 0).float()
+    # bgfg_weighting = (target == 1).float() / fg_size + (target == 0).float() / bg_size
+    # bgfg_weighting = (target == 1).float() + (target == 0).float()
+    bgfg_weighting = ((target == 1).float() / fg_size + (target == 0).float() / bg_size) * (fg_size + bg_size)
     bgfg_weighting *= mask_weights
     _loss = nn.BCEWithLogitsLoss(weight=bgfg_weighting, reduce=False)
-    l = _loss(pred_masks, gt_masks)
+    l = _loss(pred_masks, target)
     # l = l.squeeze().sum(-1).sum(-1)
     l = l.mean()
     return l
