@@ -74,8 +74,8 @@ class CocoDataset(torch.utils.data.Dataset):
             response = np.squeeze(response) * 255
             Image.fromarray(image.astype(np.uint8), "RGB").show()
             for i in range(impulse.shape[0]):
-                Image.fromarray(impulse[i].astype(np.uint8),"L").show()
-            Image.fromarray(response.astype(np.uint8),"L").show()
+                Image.fromarray(impulse[i].astype(np.uint8), "L").show()
+            Image.fromarray(response.astype(np.uint8), "L").show()
             print(self.config.CLASS_NAMES[np.argmax(one_hot)])
             input()
 
@@ -120,13 +120,13 @@ class CocoDataset(torch.utils.data.Dataset):
         # dimensions of impulse
         l = 16
         n = 4
-        impulse = np.zeros((3*n-2,)+umask.shape)
-        impulse[0][max(locx-l//2, 0):min(locx + l//2, w), max(locy-l//2, 0):min(locy + l//2, h)] = 1
-        for i in range(n-1):
-            L = (2**i)*l
-            impulse[3*i+1][max(locx-L, 0):min(locx + L, w), max(locy-L, 0):min(locy + L, h)] = 1
-            impulse[3*i+2][max(locx-L//2, 0):min(locx + L//2, w), max(locy-L, 0):min(locy + L, h)] = 1
-            impulse[3*i+3][max(locx-L, 0):min(locx + L, w), max(locy-L//2, 0):min(locy + L//2, h)] = 1
+        impulse = np.zeros((3 * n - 2,) + umask.shape)
+        impulse[0][max(locx - l // 2, 0):min(locx + l // 2, w), max(locy - l // 2, 0):min(locy + l // 2, h)] = 1
+        for i in range(n - 1):
+            L = (2**i) * l
+            impulse[3 * i + 1][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
+            impulse[3 * i + 2][max(locx - L // 2, 0):min(locx + L // 2, w), max(locy - L, 0):min(locy + L, h)] = 1
+            impulse[3 * i + 3][max(locx - L, 0):min(locx + L, w), max(locy - L // 2, 0):min(locy + L // 2, h)] = 1
         return impulse
     # unscaled image, masks
 
@@ -142,7 +142,6 @@ class CocoDataset(torch.utils.data.Dataset):
         # should probably keep crowds like oranges etc
         if is_crowd or np.sum(mask) < 50:
             return None, None, None, None, True
-
 
         # umask_obj now denotes where it is the only object present
         # mask_obj is the ground truth annotation
@@ -171,7 +170,7 @@ class CocoDataset(torch.utils.data.Dataset):
         else:
             image_obj, umask_obj, mask_obj = self.random_crop(image_obj, umask_obj, mask_obj, b, bbox)
 
-        if np.sum(np.array(umask_obj)) <20:
+        if np.sum(np.array(umask_obj)) < 20:
             return None, None, None, None, True
         impulse = self.random_impulse(umask_obj)
         gt_response = mask_obj
@@ -223,7 +222,7 @@ def get_loader(cwid, config, data_dir):
 
 
 # proposes masks for single scale feature maps.
-# for multi_scale super vision, use this multiple times
+# for multi_scale supervision, use this multiple times
 
 
 class MaskProp(nn.Module):
@@ -231,40 +230,53 @@ class MaskProp(nn.Module):
     def __init__(self, init_weights=True):
         super(MaskProp, self).__init__()
         self.relu = nn.ReLU(inplace=True)
+        self.upsample = nn.Upsample(scale_factor=2)
         self.layer5 = nn.Sequential(
             nn.Conv2d(640 + 128, 512, (3, 3), padding=(1, 1)), nn.BatchNorm2d(512), self.relu,
-            nn.Upsample(scale_factor=2),
+        )
+        self.mask_layer5 = nn.Sequential(
+            nn.Conv2d(512, 1, (3, 3), padding=(1, 1)), nn.BatchNorm2d(1), self.relu,
         )
         self.layer4 = nn.Sequential(
             nn.Conv2d(512 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
-            nn.Upsample(scale_factor=2),
+        )
+        self.mask_layer4 = nn.Sequential(
+            nn.Conv2d(256, 1, (3, 3), padding=(1, 1)), nn.BatchNorm2d(1), self.relu,
         )
         self.layer3 = nn.Sequential(
             nn.Conv2d(256 + 64, 64, (3, 3), padding=(1, 1)), nn.BatchNorm2d(64), self.relu,
-            # nn.Upsample(scale_factor=2),
         )
-        # self.layer_ = nn.Sequential(
-        #     nn.Conv2d(64, 1, (3, 3), padding=(1, 1)), nn.BatchNorm2d(1), self.relu,
-        # )
+        self.mask_layer3 = nn.Sequential(
+            nn.Conv2d(64, 1, (3, 3), padding=(1, 1)), nn.BatchNorm2d(1), self.relu,
+        )
         if init_weights:
             for name, child in self.named_children():
-                if name[:-1] == 'layer':
+                if name[:-1] == 'layer' or 'mask_layer':
                     for gc in child.children():
                         if isinstance(gc, nn.Conv2d):
                             nn.init.xavier_uniform_(gc.weight)
 
     def forward(self, x):
         c, m = x
+        masks = []
         c = F.upsample(c, scale_factor=2)
         l3, l4, l5 = m
+
         y = self.layer5(torch.cat([c, l5], 1))
+        masks.append(self.mask_layer5(y))
+        y = self.upsample(y)
+
         y = self.layer4(torch.cat([y, l4], 1))
+        masks.append(self.mask_layer4(y))
+        y = self.upsample(y)
+
         y = self.layer3(torch.cat([y, l3], 1))
-        # y = self.layer_(y)
-        y = y.unsqueeze(1)
-        y = F.max_pool3d(y,(64,1,1))
-        # print(y.shape)
-        return y.squeeze().unsqueeze(1)
+        masks.append(self.mask_layer3(y))
+        y = self.upsample(y)
+
+        return masks
+
+
 # classifier takes a single level features and classifies
 
 
@@ -292,6 +304,7 @@ class Classifier(nn.Module):
 #     i1,j1,i2,j2 = idx[:,0].min(),idx[:,1].min(),idx[:,0].max(),idx[:,1].max()
 #     l1,l2,l3 = torch.cuda.FloatTensor(base_impulse.shape).fill_(0)
 
+
 class SimpleHGModel(nn.Module):
 
     def __init__(self):
@@ -311,51 +324,57 @@ class SimpleHGModel(nn.Module):
         inp = torch.cat([im, base_impulse], dim=1)
         class_features, mask_features = self.vgg0(inp)
         m0 = self.mp0([class_features, mask_features])
-        outs.append(m0)
+        # outs.append(m0)
         # gen_impulse = F.upsample(m0, scale_factor=4)
 
         # inp = torch.cat([im, base_impulse,gen_impulse], dim=1)
         # class_features, mask_features = self.vgg(inp)
         # m1 = self.mp1([class_features, mask_features])
-        # outs.append(m1) 
+        # outs.append(m1)
         # gen_impulse = F.upsample(m1, scale_factor=4)
 
         # inp = torch.cat([im, base_impulse,gen_impulse], dim=1)
         # class_features, mask_features = self.vgg(inp)
         # m2 = self.mp2([class_features, mask_features])
-        # outs.append(m2) 
+        # outs.append(m2)
         # gen_impulse = F.upsample(m2, scale_factor=4)
-
 
         # inp = torch.cat([im, base_impulse,gen_impulse], dim=1)
         # class_features, mask_features = self.vgg(inp)
         # m3 = self.mp3([class_features, mask_features])
-        # outs.append(m3) 
+        # outs.append(m3)
         # gen_impulse = F.upsample(m3, scale_factor=4)
 
         c = self.class_predictor(class_features)
-        return c, torch.cat(outs, dim=1)
+        # return c, torch.cat(outs, dim=1)
+        return c,m0
 
 def loss_criterion(pred_class, gt_class, pred_masks, gt_mask):
     idx = gt_class[..., 0].nonzero()
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
     loss1 = classification_loss(pred_class, gt_class)
-    loss2 = mask_loss(pred_masks, gt_mask, mask_weights)
+    loss2 = multi_scale_mask_loss(pred_masks, gt_mask, mask_weights)
     return loss1, loss2
 
 # pred_masks: N,4,w,h
 # gt_mask: N,1,w,h
 
-
+def multi_scale_mask_loss(pred_masks,gt_mask,mask_weights):
+    pred_masks = reversed(pred_masks)
+    loss = 0
+    for i in range(3):
+        scale = 2**i
+        target = F.max_pool2d(gt_mask,(4*scale,4*scale),stride = 4*scale)
+        loss += mask_loss(target,next(pred_masks),mask_weights)*(scale**2)
+    return loss 
 def mask_loss(pred_masks, gt_mask, mask_weights):
-    gt_mask = F.max_pool2d(gt_mask,(4,4),stride = 4)
     fg_size = gt_mask.squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)
     bg_size = (1 - gt_mask).squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     gt_masks = gt_mask
     # bgfg_weighting = (gt_mask == 1).float() / fg_size + (gt_mask == 0).float() / bg_size
-    bgfg_weighting = (gt_masks == 1).float() *224 / fg_size + (gt_masks == 0).float()*224 / bg_size
+    bgfg_weighting = ((gt_masks == 1).float() / fg_size + (gt_masks == 0).float() / bg_size) * (fg_size + bg_size)
     # bgfg_weighting = (gt_masks == 1).float() + (gt_masks == 0).float()
     bgfg_weighting *= mask_weights
     _loss = nn.BCEWithLogitsLoss(weight=bgfg_weighting, reduce=False)

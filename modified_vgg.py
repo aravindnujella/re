@@ -304,9 +304,9 @@ class split_vgg16_features(nn.Module):
                 b = np.zeros((d_out, d_in))
                 b[range(d_out), idx] = 1
                 b = torch.from_numpy(b).unsqueeze(-1).unsqueeze(-1).float()
-                b = b.repeat([1, 1, kernel_shape[0], kernel_shape[1]])
-                w = torch.randint_like(b, 1, d_in + d_out)
-                b = b / (w**0.5)
+                b = b.repeat([1, 1, kernel_shape[0], kernel_shape[1]])/fan_in
+                # w = torch.randint_like(b, 1, d_in + d_out)
+                # b = b / (w**0.5)
                 # print(type(a),type(b))
                 copy_filters = torch.cat([a, b], 1)
                 new_conv = torch.cat([ignore_filters, copy_filters], 0)
@@ -328,7 +328,7 @@ class split_vgg16_features(nn.Module):
                         gc.ignore_filters.weight = nn.Parameter(new_ignore[l][k])
                         k += 1
                         print(gc.copy_filters.weight.shape)
-                        print(gc.ignore_filters.weight.shape,"/n")
+                        print(gc.ignore_filters.weight.shape,"\n")
                     elif isinstance(gc, nn.BatchNorm2d):
                         nn.init.constant_(gc.weight, 1)
                         nn.init.constant_(gc.bias, 0)
@@ -340,7 +340,7 @@ class split_vgg16_features(nn.Module):
 if __name__ == '__main__':
     import numpy as np
     net = split_vgg16_features(pre_trained_weights=True)
-    torch.save(net.state_dict(), "./models/split_vgg16_features_10.pt")
+    torch.save(net.state_dict(), "./models/split_vgg16_features_10_1.pt")
     # net.load_state_dict(torch.load("./models/vgg11_features.pt"))
     # net_parameters = filter(lambda p: p.requires_grad, net.parameters())
     # params = sum([np.prod(p.size()) for p in net_parameters])
