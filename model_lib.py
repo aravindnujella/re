@@ -53,9 +53,15 @@ class CocoDataset(torch.utils.data.Dataset):
                 # channels first
                 image = np.moveaxis(image, 2, 0)
                 # impulse = np.moveaxis(np.expand_dims(impulse, -1), 2, 0)
+                i1, j1, i2, j2 = self.extract_bbox(gt_response)
+                # di = (i2 - i1) // 2; dj = (j2 - j1) // 2
+                # ci = (i1 + i2) // 2; cj = (j1 + j2) // 2
+                bbox = np.zeros_like(gt_response)
+                bbox[i1:i2, j1:j2] = 1
+                # bbox[max(ci - 2 * di, 0):min(ci + 2 * di, image.shape[1]), max(cj - 2 * dj, 0):min(cj + 2 * dj, image.shape[2])] = 1
+                bbox = np.moveaxis(np.expand_dims(bbox, -1), 2, 0)
                 gt_response = np.moveaxis(np.expand_dims(gt_response, -1), 2, 0)
-                return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.tensor(
-                    one_hot)
+                return torch.from_numpy(image), torch.from_numpy(impulse), torch.from_numpy(gt_response), torch.from_numpy(bbox), torch.tensor(one_hot)
             else:
                 instance_index += 1
 
@@ -65,17 +71,19 @@ class CocoDataset(torch.utils.data.Dataset):
     def visualize_data(self):
         n = len(self)
         for i in range(n):
-            image, impulse, response, one_hot = [data.numpy() for data in self[i]]
+            image, impulse, response, bbox, one_hot = [data.numpy() for data in self[i]]
             image = np.moveaxis(image, 0, -1)
             image *= self.config.STD_PIXEL
             image += self.config.MEAN_PIXEL
             image *= 255
             impulse = impulse * 255
             response = np.squeeze(response) * 255
+            bbox = np.squeeze(bbox) * 255
             Image.fromarray(image.astype(np.uint8), "RGB").show()
             for i in range(impulse.shape[0]):
                 Image.fromarray(impulse[i].astype(np.uint8), "L").show()
             Image.fromarray(response.astype(np.uint8), "L").show()
+            Image.fromarray(bbox.astype(np.uint8), "L").show()
             print(self.config.CLASS_NAMES[np.argmax(one_hot)])
             input()
 
@@ -84,17 +92,17 @@ class CocoDataset(torch.utils.data.Dataset):
         # TODO: define weighted sampler weights based on data_order
         data_order = config.DATA_ORDER
         class_weighting = np.array(self.cw_num_instances)
-        # class_weighting = np.log2(class_weighting)
-        class_weighting = class_weighting**0.5
+        # class_weighting = np.log2(class_weighting)**2
+        class_weighting = class_weighting **0.5
+        # class_weighting[0] = 0
         class_weighting = class_weighting / np.sum(class_weighting)
         np.random.seed()
         while True:
             yield np.random.choice(self.class_ids, p=class_weighting)
 
+    # i->y, j->x
     def extract_bbox(self, mask):
         m = np.where(mask != 0)
-        if m[0].shape == (0,):
-            print(m)
         # y1,x1,y2,x2. bottom right just outside of blah
         return np.min(m[0]), np.min(m[1]), np.max(m[0]) + 1, np.max(m[1]) + 1
 
@@ -123,13 +131,18 @@ class CocoDataset(torch.utils.data.Dataset):
         # dimensions of impulse
         l = 8
         n = 4
-        impulse = np.zeros((3 * n - 2,) + umask.shape)
-        impulse[0][max(locx - l // 2, 0):min(locx + l // 2, w), max(locy - l // 2, 0):min(locy + l // 2, h)] = 1
-        for i in range(n - 1):
-            L = (3**i) * l
-            impulse[3 * i + 1][max(locx - L // 2, 0):min(locx + L // 2, w), max(locy - L, 0):min(locy + L, h)] = 1
-            impulse[3 * i + 2][max(locx - L, 0):min(locx + L, w), max(locy - L // 2, 0):min(locy + L // 2, h)] = 1
-            impulse[3 * i + 3][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
+        impulse = np.zeros((4,) + umask.shape)
+        # y1, x1, y2, x2 = self.extract_bbox(umask)
+        # impulse = np.zeros((3 * n - 2,) + umask.shape)
+        for i in range(4):
+            L = (l // 2) * (3**i)
+            impulse[i][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
+        # impulse[0][y1:y2,x1:x2] = 1
+        # for i in range(n - 1):
+        #     L = (3**i) * l
+        # #     impulse[3 * i + 1][max(locx - L // 2, 0):min(locx + L // 2, w), max(locy - L, 0):min(locy + L, h)] = 1
+        # #     impulse[3 * i + 2][max(locx - L, 0):min(locx + L, w), max(locy - L // 2, 0):min(locy + L // 2, h)] = 1
+        #     # impulse[3 * i + 3][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
         return impulse
     # unscaled image, masks
 
@@ -238,23 +251,16 @@ class MaskProp(nn.Module):
         self.layer5 = nn.Sequential(
             nn.Conv2d(640 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
         )
-        self.mask_layer5 = nn.Sequential(
-            nn.Conv2d(256, 64, (3, 3), padding=(1, 1)), nn.BatchNorm2d(64), self.relu,
-            nn.Conv2d(64, 10, (3, 3), padding=(1, 1)), nn.BatchNorm2d(10), self.relu,
-        )
         self.layer4 = nn.Sequential(
-            nn.Conv2d(256 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
-        )
-        self.mask_layer4 = nn.Sequential(
-            nn.Conv2d(256, 64, (3, 3), padding=(1, 1)), nn.BatchNorm2d(64), self.relu,
-            nn.Conv2d(64, 10, (3, 3), padding=(1, 1)), nn.BatchNorm2d(10), self.relu,
+            nn.Conv2d(256 + 128, 256, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(256 + 64, 128, (3, 3), padding=(1, 1)), nn.BatchNorm2d(128), self.relu,
-            nn.Conv2d(128, 32, (3, 3), padding=(1, 1)), nn.BatchNorm2d(32), self.relu,
+            nn.Conv2d(256 + 64, 128, (7, 7), padding=(3, 3)), nn.BatchNorm2d(128), self.relu,
+            nn.Conv2d(128, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
         )
         self.mask_layer3 = nn.Sequential(
-            nn.Conv2d(32, 10, (3, 3), padding=(1, 1)), nn.BatchNorm2d(10), self.relu,
+            nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), self.relu,
+            nn.Conv2d(10, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), self.relu,
         )
         if init_weights:
             for name, child in self.named_children():
@@ -265,24 +271,19 @@ class MaskProp(nn.Module):
 
     def forward(self, x):
         c, m = x
-        masks = []
+        # masks = []
         c = F.upsample(c, scale_factor=2)
         l3, l4, l5 = m
 
         y = self.layer5(torch.cat([c, l5], 1))
-        masks.append(self.mask_layer5(y))
         y = self.upsample(y)
 
         y = self.layer4(torch.cat([y, l4], 1))
-        masks.append(self.mask_layer4(y))
         y = self.upsample(y)
 
         y = self.layer3(torch.cat([y, l3], 1))
-        masks.append(self.mask_layer3(y))
-        y = self.upsample(y)
-
-        y = self.upsample(y)
-        return y,masks
+        y = self.mask_layer3(y)
+        return y
 
 
 # classifier takes a single level features and classifies
@@ -292,9 +293,10 @@ class Classifier(nn.Module):
 
     def __init__(self, init_weights=True):
         super(Classifier, self).__init__()
-        self.conv1 = nn.Conv2d(640, 256, (3, 3), padding=(1, 1))
+        self.conv1 = nn.Conv2d(640, 512, (3, 3), padding=(1, 1))
+        self.conv2 = nn.Conv2d(512, 512, (3, 3), padding=(1, 1))
         self.gap = nn.AvgPool2d((7, 7), stride=1)
-        self.fc = nn.Linear(256, 81)
+        self.fc = nn.Linear(512, 81)
         self.relu = nn.ReLU(inplace=True)
         if init_weights:
             nn.init.xavier_uniform_(self.conv1.weight)
@@ -302,9 +304,11 @@ class Classifier(nn.Module):
     def forward(self, x):
         x = self.conv1(x)
         x = self.relu(x)
+        x = self.conv2(x)
+        x = self.relu(x)
         x = self.gap(x)
         x = self.relu(x)
-        x = x.view(-1, 256)
+        x = x.view(x.size(0), -1)
         x = self.fc(x)
         return x
 # def expand_impulse(base_impulse):
@@ -312,15 +316,40 @@ class Classifier(nn.Module):
 #     i1,j1,i2,j2 = idx[:,0].min(),idx[:,1].min(),idx[:,0].max(),idx[:,1].max()
 #     l1,l2,l3 = torch.cuda.FloatTensor(base_impulse.shape).fill_(0)
 
+class MultiHGModel(nn.Module):
+
+    def __init__(self):
+        super(MultiHGModel, self).__init__()
+        self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
+        self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
+        self.mp0 = MaskProp()
+        self.mp1 = MaskProp()
+        self.class_predictor = Classifier()
+
+    def forward(self, x):
+        im, impulse = x
+        del x
+        inp = torch.cat([im, impulse], dim=1)
+        class_features, mask_features = self.vgg0(inp)
+        m0 = self.mp0([class_features, mask_features])
+
+        gen_impulse = F.upsample(m0, scale_factor=4)
+        impulse = impulse[:,:-1,...]
+        inp = torch.cat([im, impulse, gen_impulse], dim=1)
+        class_features, mask_features = self.vgg1(inp)
+        m1 = self.mp1([class_features, mask_features])
+
+        c = self.class_predictor(class_features)
+        return c, [m0, m1]
 
 class SimpleHGModel(nn.Module):
 
     def __init__(self):
         super(SimpleHGModel, self).__init__()
-        self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False,d_in=10)
-        self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False,d_in=32)
+        self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
+        # self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=32)
         self.mp0 = MaskProp()
-        self.mp1 = MaskProp()
+        # self.mp1 = MaskProp()
         # self.mp2 = MaskProp()
         # self.mp3 = MaskProp()
         self.class_predictor = Classifier()
@@ -331,16 +360,16 @@ class SimpleHGModel(nn.Module):
         outs = []
         inp = torch.cat([im, base_impulse], dim=1)
         class_features, mask_features = self.vgg0(inp)
-        y,m0 = self.mp0([class_features, mask_features])
+        m0 = self.mp0([class_features, mask_features])
         outs.append(m0)
         # gen_impulse = F.threshold(F.sigmoid(F.upsample(m0[-1], scale_factor=4)),0.5,0)
 
         # base_impulse = base_impulse[:,:-1,...]
-        
-        inp = torch.cat([im, y], dim=1)
-        class_features, mask_features = self.vgg1(inp)
-        y,m1 = self.mp0([class_features, mask_features])
-        outs.append(m1)
+
+        # inp = torch.cat([im, y], dim=1)
+        # class_features, mask_features = self.vgg1(inp)
+        # y, m1 = self.mp0([class_features, mask_features])
+        # outs.append(m1)
         # gen_impulse = F.upsample(m1[-1], scale_factor=4)
 
         # inp = torch.cat([im, base_impulse,gen_impulse], dim=1)
@@ -356,59 +385,119 @@ class SimpleHGModel(nn.Module):
         # gen_impulse = F.upsample(m3[-1], scale_factor=4)
 
         c = self.class_predictor(class_features)
-        return c, outs
-        # return c,m0
+        # return c, outs
+        return c, m0
 
-def loss_criterion(pred_class, gt_class, pred_masks, gt_mask,base_impulse):
+
+def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     idx = gt_class[..., 0].nonzero()
-    # mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
-    mask_weights = torch.ones(gt_class.shape[0]).float()
+    mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
-    loss1 = classification_loss(pred_class, gt_class)
-    loss2 = 0
-    for i in range(2):
-        loss2 += multi_scale_mask_loss(pred_masks[i], gt_mask, mask_weights,base_impulse)
+    mask_weights = mask_weights.view(-1, 1, 1, 1)
+    loss1 = bce_class_loss(pred_class, gt_class)
+    loss2 = mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) + mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
+    return loss1, loss2
+
+def loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
+    idx = gt_class[..., 0].nonzero()
+    mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
+    mask_weights[idx] = 0
+    mask_weights = mask_weights.view(-1, 1, 1, 1)
+    loss1 = ce_class_loss(pred_class, gt_class)
+    loss2 = mask_loss(pred_masks, gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
-def multi_scale_mask_loss(pred_masks,gt_mask,mask_weights,base_impulse):
-    pred_masks = reversed(pred_masks)
-    loss = 0
-    for i in range(3):
-        scale_down = 2**(i+2)
-        pred = next(pred_masks)
-        loss += mask_loss(pred,gt_mask,mask_weights,scale_down,base_impulse)*scale_down/4
-        # print(loss)
-    return loss 
 # gt_mask: N,1,w,h
 # pred_masks: N,1,w/scale_down,h/scale_down
-def mask_loss(pred_masks, gt_mask, mask_weights,scale_down,base_impulse):
-    target = F.max_pool2d(gt_mask,(scale_down,scale_down),stride = scale_down)
-    impulse = F.max_pool2d(base_impulse,(scale_down,scale_down),stride = scale_down)
-    fg_size = gt_mask.squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)/(scale_down**2)
-    bg_size = (1 - gt_mask).squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1)/(scale_down**2)
-    target = target*impulse
-    if (fg_size > 0).sum() != gt_mask.shape[0] or (bg_size > 0).sum() != gt_mask.shape[0]:
-        print((fg_size>0).sum(),"sdfsdfg\n",(bg_size>0).sum())
-    mask_weights = mask_weights.view(-1, 1, 1, 1).repeat(1,10,1,1)
-    # bgfg_weighting = (target == 1).float() / fg_size + (target == 0).float() / bg_size
-    # bgfg_weighting = (target == 1).float() + (target == 0).float()
-    bgfg_weighting = ((target == 1).float() / fg_size + (target == 0).float() / bg_size) * (fg_size + bg_size)
-    bgfg_weighting *= mask_weights
-    _loss = nn.BCEWithLogitsLoss(weight=bgfg_weighting, reduce=False)
-    l = _loss(pred_masks, target)
-    # l = l.squeeze().sum(-1).sum(-1)
-    l = l.mean()
-    return l
 
-
-def classification_loss(pred_class, gt_class):
+def full_mask_loss(pred_masks, target):
     _loss = nn.BCEWithLogitsLoss(reduce=False)
-    l = _loss(pred_class, gt_class)
-    # l = l.sum(-1)
+    l = _loss(pred_masks, target)
+    return l
+
+
+def bbox_mask_loss(pred_masks, target, bbox):
+    _loss = nn.BCEWithLogitsLoss(weight=bbox, reduce=False)
+    l = _loss(pred_masks, target)
+    return l
+
+
+def mask_loss(pred_masks, gt_mask, mask_weights, bbox, scale_down):
+    target = F.max_pool2d(gt_mask, (scale_down, scale_down), stride=scale_down)
+    bbox = F.max_pool2d(bbox, (scale_down, scale_down), stride=scale_down)
+    f = full_mask_loss(pred_masks, target)
+    b = bbox_mask_loss(pred_masks, target, bbox)
+    w_bbox = bbox.sum(-1).sum(-1).view(-1, 1, 1, 1)
+    # print(w_bbox.squeeze())
+    w_full = torch.cuda.FloatTensor(gt_mask.shape[0]).fill_(56 * 56).view(-1, 1, 1, 1)
+    # b = b
+    # f = f
+    l = (b/w_bbox + f/w_full)
+    # l = f/w_bbox
+    # print(b.mean().item(),f.mean().item(),l.mean().item())
+    l *= mask_weights
+    # print(mask_weights.squeeze())
+    return l.sum(-1).sum(-1).mean()
+
+# def mask_loss(pred_masks, gt_mask, mask_weights, scale_down):
+#     target = F.max_pool2d(gt_mask, (scale_down, scale_down), stride=scale_down)
+#     fg_size = gt_mask.squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1) / (scale_down**2)
+#     bg_size = (1 - gt_mask).squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1) / (scale_down**2)
+#     # bgfg_weighting = (target == 1).float() + (target == 0).float()
+#     bgfg_weighting = (target == 1).float() + (target == 0).float() * fg_size / bg_size
+#     bgfg_weighting *= mask_weights
+#     _loss = nn.BCEWithLogitsLoss(weight=bgfg_weighting, reduce=False)
+#     l = _loss(pred_masks, target)
+#     # l = l.squeeze().sum(-1).sum(-1)
+#     l = l.mean()
+#     return l
+
+
+def ce_class_loss(pred_class, gt_class):
+    _loss = nn.CrossEntropyLoss(reduce=False)
+    labels = gt_class.nonzero()[:, 1]
+    l = _loss(pred_class, labels)
     l = l.mean()
     return l
 
+
+def bce_class_loss(pred_class, gt_class):
+    idx = gt_class.nonzero()[:, 0]
+    labels = gt_class.nonzero()[:, 1]
+    w = torch.cuda.FloatTensor(gt_class.shape).fill_(1/90)
+    w[idx, labels] = 1/9
+    _loss = nn.BCEWithLogitsLoss(weight=w, reduce=False)
+    l = _loss(pred_class, gt_class)
+    return l.sum(-1).mean()
+
+
+def accuracy(pred_class, batch_one_hot, pred_masks, batch_gt_responses):
+    return class_acc(pred_class, batch_one_hot), mask_acc(pred_masks, batch_gt_responses)
+
+
+def class_acc(pred_class, batch_one_hot):
+    with torch.no_grad():
+        labels = batch_one_hot.nonzero()[:, 1]
+        maxs, indices = torch.topk(pred_class, 5, -1)
+        # print(labels,indices[:,0])
+        return (indices[:, 0] == labels).sum()/batch_one_hot.shape[0]
+
+
+def mask_acc(pred_masks, batch_gt_responses):
+    with torch.no_grad():
+        target = F.max_pool2d(batch_gt_responses, (4, 4), stride=4)
+        pred_masks = F.sigmoid(pred_masks)
+        pred_masks = F.threshold(pred_masks, 0.5, 0)
+        pred_masks = (pred_masks > 0).float()
+        # pred_masks = (pred_masks == 1)
+        union = (pred_masks+target) > 0
+        union = union.sum(-1).sum(-1)
+        intersection = (pred_masks*target) > 0
+        intersection = intersection.sum(-1).sum(-1)
+        iou = intersection/union
+        iou = iou.sum()
+        return (iou)/target.shape[0]
 # TODO: modify dummy stub to train code or inference code
 
 
